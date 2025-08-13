@@ -154,11 +154,11 @@ class MainWindow(QMainWindow):
         
         # 模型 -> UI (这是关键的解耦步骤)
         self.model.files_changed.connect(self.on_files_changed)
-        self.model.index_changed.connect(self.progress_slider.slider.setValue)
+        # self.model.index_changed.connect(self.progress_slider.slider.setValue)
         self.model.index_changed.connect(self.canvas.load_image)
         self.model.index_changed.connect(self.preview_panel.update_previews)
         self.model.show_mask_changed.connect(self.canvas.set_mask_visibility)
-        self.model.show_mask_changed.connect(self.show_mask_checkbox.setChecked)
+        # self.model.show_mask_changed.connect(self.show_mask_checkbox.setChecked)
 
     def _load_initial_settings(self):
         # 加载上次的路径

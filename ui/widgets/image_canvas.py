@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 from PyQt6.QtCore import Qt, pyqtSlot, QPointF
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
+import os
 
 class ImageCanvas(QGraphicsView):
     """核心画布，用于显示和编辑图像/Mask。"""

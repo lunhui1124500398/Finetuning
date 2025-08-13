@@ -1,5 +1,6 @@
 import configparser
 from PyQt6.QtCore import QObject, pyqtSignal
+import os
 
 class AppModel(QObject):
     """应用程序的核心数据模型，负责管理所有状态。"""
@@ -13,9 +14,21 @@ class AppModel(QObject):
     auto_save_changed = pyqtSignal(bool)
     # ... 其他需要的信号
 
-    def __init__(self, config_path='config/settings.ini'):
+        # --- START: 关键修改 ---
+    def __init__(self, config_path=None):
         super().__init__()
-        self.config_path = config_path
+        
+        # 如果没有提供外部路径，则自动计算正确的路径
+        if config_path is None:
+            # 获取当前文件(app_model.py)所在的目录 (Finetuning/core/)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            # 从 core/ 目录向上走一级，到达项目根目录 (Finetuning/)
+            project_root = os.path.dirname(current_dir)
+            # 构造到 settings.ini 的绝对路径
+            self.config_path = os.path.join(project_root, 'config', 'settings.ini')
+        else:
+            self.config_path = config_path
+
         self.config = configparser.ConfigParser()
         
         # 内部状态变量
@@ -31,7 +44,11 @@ class AppModel(QObject):
         self.load_config()
 
     def load_config(self):
-        self.config.read(self.config_path)
+        # 明确指定utf-8编码读取配置文件
+        read_files = self.config.read(self.config_path,encoding='utf-8')
+        # 加一个判断，方便调试
+        if not read_files:
+            print(f"警告: 配置文件未找到或为空: {self.config_path}")
         self.config_loaded.emit()
 
     @property
