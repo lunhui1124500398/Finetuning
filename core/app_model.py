@@ -12,9 +12,13 @@ class AppModel(QObject):
     mode_changed = pyqtSignal(str)   # str: "draw" or "erase"
     show_mask_changed = pyqtSignal(bool)
     auto_save_changed = pyqtSignal(bool)
+    # --- START: B. 新增信号 ---
+    mask_display_changed = pyqtSignal()
+    high_contrast_changed = pyqtSignal(bool)
+    # --- END: B ---
     # ... 其他需要的信号
 
-        # --- START: 关键修改 ---
+    # --- START: 关键修改 ---
     def __init__(self, config_path=None):
         super().__init__()
         
@@ -37,9 +41,14 @@ class AppModel(QObject):
         self._mask_files = []
         self._current_index = -1
         
+        # --- START: B. 新增状态 ---
         self._drawing_mode = "draw" # "draw" or "erase"
         self._show_mask = True
         self._auto_save = False
+        self._high_contrast = False
+        self._mask_display_style = "area" # "area" or "contour"
+        self._mask_invert = False
+        # --- END: B ---
 
         self.load_config()
 
@@ -111,3 +120,32 @@ class AppModel(QObject):
         
     def get_keybinding(self, key):
         return self.config['Keybindings'].get(key, '')
+    
+    # --- START: B. 新增属性和setter ---
+    @property
+    def high_contrast(self):
+        return self._high_contrast
+
+    def set_high_contrast(self, enabled):
+        if self._high_contrast != enabled:
+            self._high_contrast = enabled
+            self.high_contrast_changed.emit(enabled)
+
+    @property
+    def mask_display_style(self):
+        return self._mask_display_style
+
+    def set_mask_display_style(self, style):
+        if style in ["area", "contour"] and self._mask_display_style != style:
+            self._mask_display_style = style
+            self.mask_display_changed.emit()
+
+    @property
+    def mask_invert(self):
+        return self._mask_invert
+
+    def set_mask_invert(self, invert):
+        if self._mask_invert != invert:
+            self._mask_invert = invert
+            self.mask_display_changed.emit()
+    # --- END: B ---

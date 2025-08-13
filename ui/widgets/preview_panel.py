@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QWidget, QGridLayout, QLabel
+from PyQt6.QtWidgets import QWidget, QGridLayout, QLabel, QSizePolicy
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QPixmap
 
@@ -16,8 +16,10 @@ class PreviewPanel(QWidget):
 
     def init_ui(self):
         # 清空旧的布局
-        for i in reversed(range(self.grid_layout.count())): 
-            self.grid_layout.itemAt(i).widget().setParent(None)
+        for i in reversed(range(self.grid_layout.count())):
+            widget = self.grid_layout.itemAt(i).widget()
+            if widget is not None:
+                widget.setParent(None)
         self.labels.clear()
 
         # 从配置读取布局
@@ -27,16 +29,33 @@ class PreviewPanel(QWidget):
         for r in range(self.rows):
             row_labels = []
             for c in range(self.cols):
-                label = QLabel(f"预览 {r+1},{c+1}")
+                label = QLabel() # 移除文字
                 label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                label.setFixedSize(
-                    self.model.config['Preview'].getint('image_size', 150),
-                    self.model.config['Preview'].getint('image_size', 150)
-                )
+
+                # --- START: A4 - 移除固定尺寸，让其可伸缩 ---
+                # label.setFixedSize(...) # <--- 这是问题的根源，删除掉
+                label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored) # 允许label被拉伸
+                # --- END: A4 ---
+
                 label.setStyleSheet("border: 1px solid gray;")
                 self.grid_layout.addWidget(label, r, c)
                 row_labels.append(label)
             self.labels.append(row_labels)
+    
+    def update_label_content(self, r, c, index, image_type):
+        label = self.labels[r][c]
+        if 0 <= index < len(self.model._original_files):
+            pixmap = self.get_pixmap_for_type(index, image_type)
+            if pixmap and not pixmap.isNull(): # 增加 not pixmap.isNull() 判断
+                # --- A4. 核心逻辑: scaled() 现在会使用label动态调整后的大小 ---
+                scaled_pixmap = pixmap.scaled(label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                label.setPixmap(scaled_pixmap)
+            else:
+                label.setText("无图像") # 提示更清晰
+                label.setPixmap(QPixmap()) # 清空旧图像
+        else:
+            label.setText("") # 索引越界，显示空白
+            label.setPixmap(QPixmap()) # 清空旧图像
 
     @pyqtSlot(int)
     def update_previews(self, current_index):

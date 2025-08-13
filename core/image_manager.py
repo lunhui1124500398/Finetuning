@@ -30,6 +30,38 @@ class ImageManager:
             print(f"Error loading image {file_path}: {e}")
             return None
     
+    # --- START: B3. 新增高对比度方法 ---
+    @staticmethod
+    def apply_clahe(pixmap: QPixmap) -> QPixmap:
+        if not pixmap or pixmap.isNull():
+            return pixmap
+
+        # QPixmap -> QImage -> numpy array
+        qimage = pixmap.toImage().convertToFormat(QImage.Format.Format_RGB888)
+        width = qimage.width()
+        height = qimage.height()
+        ptr = qimage.bits()
+        ptr.setsize(qimage.sizeInBytes())
+        arr = np.array(ptr).reshape(height, width, 3)
+
+        # 转换为灰度图进行处理
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        
+        # 应用CLAHE
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced_gray = clahe.apply(gray)
+        
+        # 将处理后的灰度图转回三通道，以便显示
+        enhanced_rgb = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
+
+        # numpy array -> QImage -> QPixmap
+        h, w, ch = enhanced_rgb.shape
+        bytes_per_line = ch * w
+        enhanced_qimage = QImage(enhanced_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        
+        return QPixmap.fromImage(enhanced_qimage)
+    # --- END: B3 ---
+
     @staticmethod
     def save_pixmap(pixmap, file_path):
         if not pixmap or not file_path:
