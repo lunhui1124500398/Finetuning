@@ -2,7 +2,7 @@ import os
 import cv2
 import numpy as np
 from PIL import Image, ImageQt
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBitmap
 from PyQt6.QtCore import Qt
 
 class ImageManager:
@@ -71,43 +71,59 @@ class ImageManager:
         pixmap.save(file_path, 'PNG')
 
     @staticmethod
-    def create_overlay_pixmap(original_pixmap, mask_pixmap, style, color_rgba, contour_thickness=2):
+    def create_overlay_pixmap(original_pixmap, mask_pixmap, style, color_rgba, contour_thickness=2, invert=False, inner_contour_color_rgba=None):
         if not original_pixmap or not mask_pixmap:
             return original_pixmap or QPixmap()
 
-        # 创建一个可绘制的副本
         output_pixmap = original_pixmap.copy()
-        
         painter = QPainter(output_pixmap)
-        
-        if style == 'overlay':
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-            temp_mask = mask_pixmap.copy()
-            mask_color = QColor(*color_rgba)
-            
-            # 创建一个纯色图层，然后用二值化mask作为它的蒙版
-            color_layer = QPixmap(temp_mask.size())
-            color_layer.fill(mask_color)
-            color_layer.setMask(temp_mask.createMaskFromColor(Qt.GlobalColor.black, Qt.MaskMode.MaskOutColor))
-            
+
+        # 步骤1: 获取用于操作的二值化图像 (QImage)
+        mask_image = mask_pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+
+        # (新增) 处理反相逻辑
+        if invert:
+            mask_image.invertPixels()
+
+        if style == 'area':
+            # 创建一个纯色图层
+            color_layer = QPixmap(mask_pixmap.size())
+            color_layer.fill(QColor(*color_rgba))
+
+            # 使用处理后(可能已反相)的mask_image作为蒙版
+            color_layer.setMask(QBitmap.fromImage(mask_image))
+
             painter.drawPixmap(0, 0, color_layer)
 
         elif style == 'contour':
-            # 将 QPixmap 转换为 OpenCV 格式
-            qimage = mask_pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
-            ptr = qimage.bits()
-            ptr.setsize(qimage.sizeInBytes())
-            arr = np.array(ptr).reshape(qimage.height(), qimage.width())
+            # 将 QImage 转换为 OpenCV 格式
+            ptr = mask_image.bits()
+            ptr.setsize(mask_image.sizeInBytes())
+            arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
 
-            contours, _ = cv2.findContours(arr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            pen = QPen(QColor(*color_rgba[:3]), contour_thickness)
-            painter.setPen(pen)
-            for contour in contours:
-                for i in range(len(contour)):
-                    p1 = contour[i][0]
-                    p2 = contour[(i + 1) % len(contour)][0]
-                    painter.drawLine(int(p1[0]), int(p1[1]), int(p2[0]), int(p2[1]))
+            # (修改) 使用 RETR_TREE 来获取所有轮廓和层级
+            contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+            if not hierarchy is None:
+                hierarchy = hierarchy[0] # 简化层级数组
+                for i, contour in enumerate(contours):
+                    # 判断是外轮廓还是内轮廓(空洞)
+                    # hierarchy[i][3] == -1 表示是顶层轮廓(外轮廓)
+                    is_hole = hierarchy[i][3] != -1
+
+                    if is_hole and inner_contour_color_rgba:
+                        pen_color = QColor(*inner_contour_color_rgba)
+                    else:
+                        pen_color = QColor(*color_rgba)
+
+                    pen = QPen(pen_color, contour_thickness)
+                    painter.setPen(pen)
+
+                    # OpenCV的轮廓可以直接绘制为QPolygonF
+                    from PyQt6.QtGui import QPolygonF
+                    from PyQt6.QtCore import QPointF
+                    polygon = QPolygonF([QPointF(p[0][0], p[0][1]) for p in contour])
+                    painter.drawPolyline(polygon)
 
         painter.end()
         return output_pixmap

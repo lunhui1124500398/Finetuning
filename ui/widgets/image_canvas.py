@@ -25,12 +25,13 @@ class ImageCanvas(QGraphicsView):
         # 内部状态
         self._mask_pixmap = None
         self._is_drawing = False
+        self.last_draw_point = None
 
         # --- B4. 初始化光标 ---
         self.draw_cursor = QCursor(Qt.CursorShape.CrossCursor)
         self.erase_cursor = QCursor(Qt.CursorShape.PointingHandCursor) # 可自定义
         self.setCursor(self.draw_cursor) # 默认
-        
+
         self.init_ui()
 
     def init_ui(self):
@@ -48,6 +49,9 @@ class ImageCanvas(QGraphicsView):
             self.scene.addItem(self._original_item)
             self.scene.addItem(self._mask_item)
             return
+        
+        # (V3.0新增) 重置缓存
+        self._contrast_pixmap = None
 
         # 加载原图
         original_path = self.model._original_files[index]
@@ -104,44 +108,42 @@ class ImageCanvas(QGraphicsView):
             self.setCursor(self.erase_cursor)
 
     def update_mask_item(self):
-        """【重大修改】根据显示方式(面积/轮廓/反相)来更新Mask图层"""
-        if not self._mask_pixmap: return
-            
-        color_str = self.model.config['Colors'].get('mask_overlay_color', '255,0,0,100')
-        color_rgba = tuple(map(int, color_str.split(',')))
-        mask_color = QColor(*color_rgba)
-        
+        if not self.model.show_mask or not self._mask_pixmap:
+            self._mask_item.setPixmap(QPixmap())
+            return
+
+        # 从配置中获取颜色和样式
+        style = self.model.mask_display_style
+        invert = self.model.mask_invert
+
+        area_color_str = self.model.config['Colors'].get('mask_overlay_color', '255,0,0,100')
+        area_color_rgba = tuple(map(int, area_color_str.split(',')))
+
         contour_color_str = self.model.config['Colors'].get('contour_line_color', '0,255,0,255')
         contour_color_rgba = tuple(map(int, contour_color_str.split(',')))
-        
-        contour_thickness = self.model.config['Colors'].getint('contour_thickness', 2)
 
-        # 使用ImageManager中的叠加函数，因为它已经实现了轮廓和面积
-        # 我们需要一个基础pixmap来叠加，这里创建一个透明的
+        # (新增) 为内轮廓获取颜色，如果未定义，则使用与外轮廓相同的颜色
+        inner_color_str = self.model.config['Colors'].get('inner_contour_color', contour_color_str)
+        inner_color_rgba = tuple(map(int, inner_color_str.split(',')))
+
+        thickness = self.model.config['Colors'].getint('contour_thickness', 2)
+
+        # 创建一个透明的底图用于叠加
         base_pixmap = QPixmap(self._mask_pixmap.size())
         base_pixmap.fill(Qt.GlobalColor.transparent)
 
-        # 如果是反相模式，先创建一个反相的mask
-        mask_to_use = self._mask_pixmap
-        if self.model.mask_invert:
-            inverted_mask = QPixmap(self._mask_pixmap.size())
-            inverted_mask.fill(Qt.GlobalColor.white)
-            painter = QPainter(inverted_mask)
-            # 在白色背景上“画出”黑色部分
-            painter.drawPixmap(0, 0, self._mask_pixmap.createMaskFromColor(Qt.GlobalColor.white, Qt.MaskMode.MaskOutColor))
-            painter.end()
-            mask_to_use = inverted_mask
-
-        # 调用 manager 的方法生成最终效果
-        final_mask_overlay = self.image_manager.create_overlay_pixmap(
-            base_pixmap, 
-            mask_to_use, 
-            self.model.mask_display_style, 
-            mask_color if self.model.mask_display_style == 'area' else contour_color_rgba,
-            contour_thickness
+        # 直接调用 image_manager 的强大方法
+        final_overlay = self.image_manager.create_overlay_pixmap(
+            base_pixmap,
+            self._mask_pixmap,
+            style,
+            area_color_rgba if style == 'area' else contour_color_rgba,
+            thickness,
+            invert,
+            inner_color_rgba
         )
 
-        self._mask_item.setPixmap(final_mask_overlay)
+        self._mask_item.setPixmap(final_overlay)
         
     def wheelEvent(self, event):
         """鼠标滚轮缩放"""
@@ -153,12 +155,19 @@ class ImageCanvas(QGraphicsView):
         else:
             self.scale(zoom_out_factor, zoom_out_factor)
 
+    # In /ui/widgets/image_canvas.py
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self._original_item.pixmap():
             self._is_drawing = True
+            self.setDragMode(QGraphicsView.DragMode.NoDrag) # (新增) 禁用拖拽
+            # (新增) 在绘图开始时记录撤销状态
+            self.push_undo_state() # <-- B.8中会实现
+            # 记录下笔点，但不记录上一个点
+            self.last_draw_point = None 
             self.draw_on_mask(event.pos())
         else:
-            super().mousePressEvent(event) # 否则执行默认的拖拽事件
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._is_drawing and self._original_item.pixmap():
@@ -167,44 +176,52 @@ class ImageCanvas(QGraphicsView):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self._is_drawing: #确保是我们自己的绘图事件
             self._is_drawing = False
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag) # (新增) 恢复拖拽
             # 如果开启了自动保存，则在鼠标释放时触发
             if self.model.auto_save:
                 self.save_current_mask()
+            self.last_draw_point = None # (新增) 抬笔后重置
         else:
             super().mouseReleaseEvent(event)
 
     def draw_on_mask(self, view_pos):
         scene_pos = self.mapToScene(view_pos)
         item_pos = self._original_item.mapFromScene(scene_pos)
-        
-        brush_size = self.model.config['Drawing'].getint('brush_size', 20)
-        
-        painter = QPainter(self._mask_pixmap)
-        
-        if self.model.drawing_mode == "draw":
-            painter.setPen(QPen(Qt.GlobalColor.white, brush_size, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin))
-            painter.setBrush(QBrush(Qt.GlobalColor.white))
-        else: # erase mode
-            painter.setPen(QPen(Qt.GlobalColor.black, brush_size, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin))
-            painter.setBrush(QBrush(Qt.GlobalColor.black))
 
-        painter.drawPoint(item_pos.toPoint())
+        brush_size = self.model.config['Drawing'].getint('brush_size', 10) # 减小默认值
+
+        painter = QPainter(self._mask_pixmap)
+
+        # (修改) 设置画笔，不再需要设置Brush
+        color = Qt.GlobalColor.white if self.model.drawing_mode == "draw" else Qt.GlobalColor.black
+        pen = QPen(color, brush_size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+
+        # (修改) 从画点改为画线，实现平滑绘制
+        if self.last_draw_point:
+            painter.drawLine(self.last_draw_point, item_pos)
+        else: # 如果是第一个点，就只画一个点
+            painter.drawPoint(item_pos)
+
+        self.last_draw_point = item_pos # 更新上一个点的位置
+
         painter.end()
 
-        # 实时更新视图
         self.update_mask_item()
-        # 通知model数据已变动
         self.model.mask_updated.emit()
     
     def clear_current_mask(self):
         if self._mask_pixmap:
+            # (新增) 在清除前记录撤销状态
+            self.push_undo_state() # <-- B.8中会实现
             self._mask_pixmap.fill(Qt.GlobalColor.black)
             self.update_mask_item()
             self.model.mask_updated.emit()
             if self.model.auto_save:
                 self.save_current_mask()
+            self.setFocus() #(新增)清楚后恢复焦点
                 
     def save_current_mask(self):
         index = self.model.current_index
@@ -213,10 +230,10 @@ class ImageCanvas(QGraphicsView):
             
         # START: 修正 - 从模型获取保存路径
         mask_dir = self.model.get_path('save_path')
-        # END: 修正
         if not mask_dir:
             # 现在QMessageBox已经被正确导入，可以正常使用了
             QMessageBox.warning(self, "保存失败", "请在路径设置中指定有效的“保存路径”！")
+            self.setFocus() # (新增) 即使失败也要恢复焦点
             return
         
         # 从原图文件名生成mask文件名
@@ -226,3 +243,20 @@ class ImageCanvas(QGraphicsView):
         
         self.image_manager.save_pixmap(self._mask_pixmap, save_path)
         print(f"Mask saved to {save_path}")
+        self.setFocus() # (新增) 保存成功后也要恢复焦点
+
+    # 推入栈
+    def push_undo_state(self):
+        if self._mask_pixmap:
+            self.model.push_undo_state(self.model.current_index, self._mask_pixmap)
+    
+    def undo(self):
+        last_state = self.model.pop_undo_state(self.model.current_index)
+        if last_state:
+            # (可选) 将当前状态推入redo栈
+            # self.model.push_redo_state(self.model.current_index, self._mask_pixmap)
+
+            self._mask_pixmap = last_state
+            self.update_mask_item()
+            self.model.mask_updated.emit()
+            print("Undo successful.")
