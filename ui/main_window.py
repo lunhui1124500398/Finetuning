@@ -281,6 +281,7 @@ class MainWindow(QMainWindow):
         self.progress_slider.slider.blockSignals(True)
         self.progress_slider.set_value(index)
         self.progress_slider.slider.blockSignals(False)
+        self.progress_slider.update_label() # <-- 新增
         self.canvas.load_image(index)
         self.preview_panel.update_previews(index)
 

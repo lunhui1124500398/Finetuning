@@ -127,3 +127,38 @@ class ImageManager:
 
         painter.end()
         return output_pixmap
+    
+    # --- START: 新增方法 (解决问题 #8) ---
+    @staticmethod
+    def create_filled_mask(pixmap: QPixmap) -> QPixmap:
+        """
+        接收一个包含轮廓线条的pixmap，返回一个填充了这些轮廓的二值化pixmap。
+        """
+        if not pixmap or pixmap.isNull():
+            return pixmap
+
+        # QPixmap -> QImage -> numpy array (grayscale)
+        qimage = pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+        ptr = qimage.bits()
+        ptr.setsize(qimage.sizeInBytes())
+        arr = np.array(ptr).reshape(qimage.height(), qimage.width())
+
+        # 寻找最外层的轮廓
+        contours, _ = cv2.findContours(arr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # 创建一个纯黑的背景
+        filled_arr = np.zeros_like(arr)
+
+        # 在黑色背景上绘制填充后的轮廓
+        # thickness=cv2.FILLED 表示填充
+        cv2.drawContours(filled_arr, contours, -1, (255), thickness=cv2.FILLED)
+
+        # numpy array -> QImage -> QPixmap
+        h, w = filled_arr.shape
+        bytes_per_line = w
+        filled_qimage = QImage(filled_arr.data, w, h, bytes_per_line, QImage.Format.Format_Grayscale8)
+        
+        # 转换为RGBA格式以确保兼容性
+        final_pixmap = QPixmap.fromImage(filled_qimage.convertToFormat(QImage.Format.Format_RGBA8888))
+        return final_pixmap
+    # --- END: 新增方法 ---

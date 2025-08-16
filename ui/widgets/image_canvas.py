@@ -22,14 +22,16 @@ class ImageCanvas(QGraphicsView):
         self.scene.addItem(self._original_item)
         self.scene.addItem(self._mask_item)
 
-        # 内部状态
+        # 状态变量
         self._mask_pixmap = None
         self._is_drawing = False
         self.last_draw_point = None
+        self._is_panning = False 
+        self._pan_start_pos = QPointF()
 
         # --- B4. 初始化光标 ---
         self.draw_cursor = QCursor(Qt.CursorShape.CrossCursor)
-        self.erase_cursor = QCursor(Qt.CursorShape.PointingHandCursor) # 可自定义
+        self.erase_cursor = QCursor(Qt.CursorShape.ForbiddenCursor) # 可自定义
         self.setCursor(self.draw_cursor) # 默认
 
         self.init_ui()
@@ -101,11 +103,16 @@ class ImageCanvas(QGraphicsView):
     
     @pyqtSlot(str)
     def set_drawing_mode(self, mode):
-        """响应工具切换，改变光标"""
-        if mode == "draw":
-            self.setCursor(self.draw_cursor)
-        else:
-            self.setCursor(self.erase_cursor)
+        if mode in ["draw", "erase"]:
+            # 进入绘图/橡皮模式时，禁用默认的左键拖拽
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            if mode == "draw":
+                self.setCursor(self.draw_cursor)
+            else:
+                self.setCursor(self.erase_cursor)
+        else: # 如果未来有"pan"模式
+             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+             self.setCursor(Qt.CursorShape.OpenHandCursor)
 
     def update_mask_item(self):
         if not self.model.show_mask or not self._mask_pixmap:
@@ -158,55 +165,109 @@ class ImageCanvas(QGraphicsView):
     # In /ui/widgets/image_canvas.py
 
     def mousePressEvent(self, event):
+        # 中键拖拽逻辑 (解决问题 #6)
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_panning = True
+            self._pan_start_pos = event.pos()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+
+        # 左键绘图逻辑
         if event.button() == Qt.MouseButton.LeftButton and self._original_item.pixmap():
+            # 阻止在面积模式下绘图 (解决问题 #2)
+            if self.model.mask_display_style == 'area':
+                QMessageBox.information(self, "提示", "请切换到“轮廓”显示方式以进行绘制。")
+                # 依然允许默认的拖拽事件
+                super().mousePressEvent(event)
+                return
+
+            # 处理在隐藏Mask时开始绘制的情况 (解决问题 #4)
+            if not self.model.show_mask:
+                # 弹窗确认，避免误操作(觉得烦可以只显示一次)
+                reply = QMessageBox.question(self, '新一轮绘制', 
+                                             '您当前未显示Mask，是否要清空现有Mask并开始新的绘制？',
+                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                             QMessageBox.StandardButton.No)
+                if reply == QMessageBox.StandardButton.No:
+                    return
+
+                if self._mask_pixmap:
+                    self.push_undo_state()
+                    self._mask_pixmap.fill(Qt.GlobalColor.black)
+                
+                self.model.set_show_mask(True)
+                if self.model.mask_display_style != 'contour':
+                    self.model.set_mask_display_style('contour')
+
+            # --- 开始绘制 ---
             self._is_drawing = True
-            self.setDragMode(QGraphicsView.DragMode.NoDrag) # (新增) 禁用拖拽
-            # (新增) 在绘图开始时记录撤销状态
-            self.push_undo_state() # <-- B.8中会实现
-            # 记录下笔点，但不记录上一个点
-            self.last_draw_point = None 
+            self.push_undo_state()
+            self.last_draw_point = None
             self.draw_on_mask(event.pos())
-        else:
-            super().mousePressEvent(event)
+            event.accept()
+            return
+            
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self._is_drawing and self._original_item.pixmap():
+        # 中键拖拽移动 (解决问题 #6)
+        if self._is_panning:
+            delta = event.pos() - self._pan_start_pos
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            self._pan_start_pos = event.pos()
+            event.accept()
+            return
+
+        # 左键绘图移动
+        if self._is_drawing:
             self.draw_on_mask(event.pos())
-        else:
-            super().mouseMoveEvent(event)
+            event.accept()
+            return
+            
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._is_drawing: #确保是我们自己的绘图事件
+        # 中键拖拽释放 (解决问题 #6)
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_panning = False
+            # 恢复到当前模式应有的光标和拖拽设置
+            self.set_drawing_mode(self.model.drawing_mode)
+            event.accept()
+            return
+
+        # 左键绘图释放
+        if event.button() == Qt.MouseButton.LeftButton and self._is_drawing:
             self._is_drawing = False
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag) # (新增) 恢复拖拽
-            # 如果开启了自动保存，则在鼠标释放时触发
+            self.last_draw_point = None
             if self.model.auto_save:
                 self.save_current_mask()
-            self.last_draw_point = None # (新增) 抬笔后重置
-        else:
-            super().mouseReleaseEvent(event)
+            event.accept()
+            return
+
+        super().mouseReleaseEvent(event)
 
     def draw_on_mask(self, view_pos):
         scene_pos = self.mapToScene(view_pos)
         item_pos = self._original_item.mapFromScene(scene_pos)
 
-        brush_size = self.model.config['Drawing'].getint('brush_size', 10) # 减小默认值
+        # --- 修改 (解决问题 #3) ---
+        if self.model.drawing_mode == "draw":
+            brush_size = self.model.config['Drawing'].getint('brush_size', 3)
+        else: # erase
+            brush_size = self.model.config['Drawing'].getint('eraser_size', 15)
 
         painter = QPainter(self._mask_pixmap)
-
-        # (修改) 设置画笔，不再需要设置Brush
         color = Qt.GlobalColor.white if self.model.drawing_mode == "draw" else Qt.GlobalColor.black
         pen = QPen(color, brush_size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
 
-        # (修改) 从画点改为画线，实现平滑绘制
         if self.last_draw_point:
             painter.drawLine(self.last_draw_point, item_pos)
-        else: # 如果是第一个点，就只画一个点
+        else:
             painter.drawPoint(item_pos)
-
-        self.last_draw_point = item_pos # 更新上一个点的位置
-
+        self.last_draw_point = item_pos
         painter.end()
 
         self.update_mask_item()
@@ -241,7 +302,10 @@ class ImageCanvas(QGraphicsView):
         mask_filename = os.path.splitext(original_filename)[0] + '.png'
         save_path = os.path.join(mask_dir, mask_filename)
         
-        self.image_manager.save_pixmap(self._mask_pixmap, save_path)
+        # 在保存前，将轮廓线转换为填充区域
+        pixmap_to_save = self.image_manager.create_filled_mask(self._mask_pixmap)
+
+        self.image_manager.save_pixmap(pixmap_to_save, save_path)
         print(f"Mask saved to {save_path}")
         self.setFocus() # (新增) 保存成功后也要恢复焦点
 
