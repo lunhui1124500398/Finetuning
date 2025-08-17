@@ -129,11 +129,13 @@ class MainWindow(QMainWindow):
         self.draw_button.setChecked(True)
         tool_buttons_layout.addWidget(self.draw_button)
         tool_buttons_layout.addWidget(self.erase_button)
-        action_buttons_layout = QHBoxLayout()
+        action_buttons_layout = QVBoxLayout()
         self.clear_button = QPushButton("清除Mask (W)")
         self.save_button = QPushButton("保存 (Ctrl+S)")
+        self.save_and_next_button = QPushButton("保存并下一张 (Ctrl+N)")
         action_buttons_layout.addWidget(self.clear_button)
         action_buttons_layout.addWidget(self.save_button)
+        action_buttons_layout.addWidget(self.save_and_next_button)
         tools_layout.addLayout(tool_buttons_layout)
         tools_layout.addLayout(action_buttons_layout)
 
@@ -202,6 +204,7 @@ class MainWindow(QMainWindow):
         create_shortcut('erase_mode', lambda: self.model.set_drawing_mode("erase"))
         create_shortcut('clear_mask', self.canvas.clear_current_mask)
         create_shortcut('import_files', self.import_images)
+        create_shortcut('save_and_next', self.save_and_next)
 
         # --- START: 核心修正 - 快捷键直接更新模型，而不是模拟UI点击 ---
         create_shortcut('toggle_mask', lambda: self.model.set_show_mask(not self.model.show_mask))
@@ -219,6 +222,7 @@ class MainWindow(QMainWindow):
         # 编辑操作
         self.clear_button.clicked.connect(self.canvas.clear_current_mask)
         self.save_button.clicked.connect(self.canvas.save_current_mask)
+        self.save_and_next_button.clicked.connect(self.save_and_next)
 
         # --- START: 核心修正 - 修正信号连接以打破递归 ---
 
@@ -296,6 +300,15 @@ class MainWindow(QMainWindow):
             self.canvas.load_image(-1)
             QMessageBox.information(self, "提示", "在指定路径下未找到图像文件。")
     
+    def save_and_next(self):
+        """保存当前mask，如果成功，则移动到下一张图像。"""
+        if self.model.current_index < 0:
+            return
+        
+        # 调用save_current_mask并检查其返回值
+        if self.canvas.save_current_mask():
+            self.model.increment_index()
+
     # --- Other methods ---
     def _load_initial_settings(self):
         self.original_path_selector.set_path(self.model.get_path('original_path'))

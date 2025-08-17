@@ -102,7 +102,7 @@ class ImageManager:
             arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
 
             # (修改) 使用 RETR_TREE 来获取所有轮廓和层级
-            contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            contours, hierarchy = cv2.findContours(arr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
             if not hierarchy is None:
                 hierarchy = hierarchy[0] # 简化层级数组

@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QMessageBox
+from PyQt6.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QMessageBox
 from PyQt6.QtCore import Qt, pyqtSlot, QPointF
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush, QCursor #引入qcursor
 import os
@@ -29,11 +29,17 @@ class ImageCanvas(QGraphicsView):
         self._is_panning = False 
         self._pan_start_pos = QPointF()
 
-        # --- B4. 初始化光标 ---
-        self.draw_cursor = QCursor(Qt.CursorShape.CrossCursor)
-        self.erase_cursor = QCursor(Qt.CursorShape.ForbiddenCursor) # 可自定义
-        self.setCursor(self.draw_cursor) # 默认
+        # 【新增】 用于光标预览的状态
+        self._preview_cursor_pos = None
+        self._show_preview_cursor = False
 
+        self.draw_cursor = QCursor(Qt.CursorShape.CrossCursor)
+        self.erase_cursor = QCursor(Qt.CursorShape.CrossCursor) # 可自定义
+        self.setCursor(self.draw_cursor) # 默认
+        
+        # 允许鼠标跟踪以实时更新光标预览
+        self.setMouseTracking(True)
+        
         self.init_ui()
 
     def init_ui(self):
@@ -98,7 +104,10 @@ class ImageCanvas(QGraphicsView):
 
     @pyqtSlot(bool)
     def set_mask_visibility(self, visible):
+        """【修改 #3】在设置为可见时，强制刷新mask视图"""
         self._mask_item.setVisible(visible)
+        if visible:
+            self.update_mask_item()
 
     
     @pyqtSlot(str)
@@ -170,8 +179,11 @@ class ImageCanvas(QGraphicsView):
             self._is_panning = True
             self._pan_start_pos = event.pos()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self._show_preview_cursor = False # 拖动时隐藏预览圈
+            self.viewport().update()
             event.accept()
             return
+        
 
         # 左键绘图逻辑
         if event.button() == Qt.MouseButton.LeftButton and self._original_item.pixmap():
@@ -184,14 +196,7 @@ class ImageCanvas(QGraphicsView):
 
             # 处理在隐藏Mask时开始绘制的情况 (解决问题 #4)
             if not self.model.show_mask:
-                # 弹窗确认，避免误操作(觉得烦可以只显示一次)
-                reply = QMessageBox.question(self, '新一轮绘制', 
-                                             '您当前未显示Mask，是否要清空现有Mask并开始新的绘制？',
-                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                             QMessageBox.StandardButton.No)
-                if reply == QMessageBox.StandardButton.No:
-                    return
-
+                # 自动清空并显示，不再弹窗
                 if self._mask_pixmap:
                     self.push_undo_state()
                     self._mask_pixmap.fill(Qt.GlobalColor.black)
@@ -199,6 +204,12 @@ class ImageCanvas(QGraphicsView):
                 self.model.set_show_mask(True)
                 if self.model.mask_display_style != 'contour':
                     self.model.set_mask_display_style('contour')
+
+                # if self._mask_pixmap:
+                #     self.push_undo_state()
+                #     self._mask_pixmap.fill(Qt.GlobalColor.black)
+                
+                # self.model.set_show_mask(True)
 
             # --- 开始绘制 ---
             self._is_drawing = True
@@ -225,6 +236,11 @@ class ImageCanvas(QGraphicsView):
             self.draw_on_mask(event.pos())
             event.accept()
             return
+        
+        # 【新增 #2】 更新预览光标位置
+        self._preview_cursor_pos = event.pos()
+        if self._show_preview_cursor:
+            self.viewport().update() # 触发paintEvent重绘
             
         super().mouseMoveEvent(event)
 
@@ -234,6 +250,7 @@ class ImageCanvas(QGraphicsView):
             self._is_panning = False
             # 恢复到当前模式应有的光标和拖拽设置
             self.set_drawing_mode(self.model.drawing_mode)
+            self._show_preview_cursor = True # 恢复预览圈显示
             event.accept()
             return
 
@@ -241,25 +258,78 @@ class ImageCanvas(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton and self._is_drawing:
             self._is_drawing = False
             self.last_draw_point = None
+            self._show_preview_cursor = True # 恢复预览圈显示
+            self.viewport().update()
             if self.model.auto_save:
                 self.save_current_mask()
             event.accept()
             return
 
         super().mouseReleaseEvent(event)
+    
+    # 【新增 #2】 处理鼠标进入/离开画布区域的事件
+    def enterEvent(self, event):
+        self._show_preview_cursor = True
+        self.viewport().update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._show_preview_cursor = False
+        self.viewport().update()
+        super().leaveEvent(event)
+
+    # 【新增 #2】 重写paintEvent以绘制预览光标
+    def paintEvent(self, event):
+        super().paintEvent(event) # 先执行默认的绘制
+        
+        if self._show_preview_cursor and self._preview_cursor_pos and self.model.drawing_mode in ["draw", "erase"]:
+            painter = QPainter(self.viewport())
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            mode = self.model.drawing_mode
+            modifiers = QApplication.keyboardModifiers()
+            if modifiers == Qt.KeyboardModifier.AltModifier:
+                mode = "erase"
+            elif modifiers == Qt.KeyboardModifier.ShiftModifier:
+                mode = "draw"
+
+            if mode == "draw":
+                size = self.model.config['Drawing'].getint('brush_size', 3)
+                color = QColor(0, 255, 0, 120) # 绿色半透明
+            else: # erase
+                size = self.model.config['Drawing'].getint('eraser_size', 10)
+                color = QColor(255, 0, 0, 120) # 红色半透明
+
+            # 根据当前视图缩放比例调整预览圈大小
+            scale = self.transform().m11()
+            radius = (size / 2.0) * scale
+
+            painter.setPen(QPen(color, 1))
+            painter.setBrush(QColor(color.red(), color.green(), color.blue(), 50)) # 更淡的填充
+            painter.drawEllipse(QPointF(self._preview_cursor_pos), radius, radius)
+
 
     def draw_on_mask(self, view_pos):
         scene_pos = self.mapToScene(view_pos)
         item_pos = self._original_item.mapFromScene(scene_pos)
+        
+        # 【修改 #7.1, #7.2】 根据键盘修饰符 (Alt/Shift) 动态决定绘制模式
+        modifiers = QApplication.keyboardModifiers()
+        
+        effective_mode = self.model.drawing_mode
+        if modifiers == Qt.KeyboardModifier.AltModifier:
+            effective_mode = "erase" # 按住Alt强制为橡皮
+        elif modifiers == Qt.KeyboardModifier.ShiftModifier:
+            effective_mode = "draw"  # 按住Shift强制为画笔
 
-        # --- 修改 (解决问题 #3) ---
-        if self.model.drawing_mode == "draw":
+        if effective_mode == "draw":
             brush_size = self.model.config['Drawing'].getint('brush_size', 3)
+            color = Qt.GlobalColor.white
         else: # erase
             brush_size = self.model.config['Drawing'].getint('eraser_size', 15)
+            color = Qt.GlobalColor.black
 
         painter = QPainter(self._mask_pixmap)
-        color = Qt.GlobalColor.white if self.model.drawing_mode == "draw" else Qt.GlobalColor.black
         pen = QPen(color, brush_size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
 
@@ -285,29 +355,27 @@ class ImageCanvas(QGraphicsView):
             self.setFocus() #(新增)清楚后恢复焦点
                 
     def save_current_mask(self):
+        """【修改 #7.3】增加返回值，用于判断是否保存成功"""
         index = self.model.current_index
         if index < 0 or not self._mask_pixmap:
-            return
+            return False
             
-        # START: 修正 - 从模型获取保存路径
         mask_dir = self.model.get_path('save_path')
         if not mask_dir:
-            # 现在QMessageBox已经被正确导入，可以正常使用了
             QMessageBox.warning(self, "保存失败", "请在路径设置中指定有效的“保存路径”！")
-            self.setFocus() # (新增) 即使失败也要恢复焦点
-            return
+            self.setFocus()
+            return False
         
-        # 从原图文件名生成mask文件名
         original_filename = os.path.basename(self.model._original_files[index])
         mask_filename = os.path.splitext(original_filename)[0] + '.png'
         save_path = os.path.join(mask_dir, mask_filename)
         
-        # 在保存前，将轮廓线转换为填充区域
         pixmap_to_save = self.image_manager.create_filled_mask(self._mask_pixmap)
 
         self.image_manager.save_pixmap(pixmap_to_save, save_path)
         print(f"Mask saved to {save_path}")
-        self.setFocus() # (新增) 保存成功后也要恢复焦点
+        self.setFocus()
+        return True # 保存成功
 
     # 推入栈
     def push_undo_state(self):
