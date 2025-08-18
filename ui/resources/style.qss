@@ -25,12 +25,6 @@ QPushButton {
     min-height: 20px;
 }
 
-QPushButton#Toggle{
-    padding: 2px;
-    border-radius: 10px;
-    min-height: 16px;
-}
-
 QPushButton:hover {
     background-color: #5a5b5c;
     border-color: #6a6b6c;
