@@ -8,34 +8,46 @@ from PyQt6.QtCore import Qt, pyqtSlot, QSize, QTimer
 from PyQt6.QtGui import QPixmap
 import os
 
-# --- START: 新增可折叠标题栏控件 ---
+# --- 【修改 Q5】重新设计可折叠标题栏，使其支持垂直布局和折叠 ---
 class CollapsibleHeader(QWidget):
     def __init__(self, title, parent=None):
-        super().__init__(parent)
-        self.is_collapsed = False
-        
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(5)
+     super().__init__(parent)
+     self.is_collapsed = False
 
-        self.toggle_button = QPushButton("v")
-        self.toggle_button.setFixedSize(QSize(20, 20))
-        self.toggle_button.setCheckable(True)
-        self.toggle_button.setChecked(False)
-        
-        self.title_label = QLabel(title)
-        self.title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        
-        self.content_widget = QWidget() # 用于容纳 HC 和交换按钮
-        self.content_layout = QHBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(0, 0, 0, 0)
-        self.content_layout.addStretch()
+     # 主布局改为垂直
+     main_layout = QVBoxLayout(self)
+     main_layout.setContentsMargins(2, 2, 2, 2)
+     main_layout.setSpacing(5)
 
-        layout.addWidget(self.toggle_button)
-        layout.addWidget(self.title_label)
-        layout.addWidget(self.content_widget)
+     # 标题行
+     title_bar = QWidget()
+     title_layout = QHBoxLayout(title_bar)
+     title_layout.setContentsMargins(0, 0, 0, 0)
+     title_layout.setSpacing(5)
 
-        self.toggle_button.toggled.connect(self.toggle)
+     self.toggle_button = QPushButton("v")
+     self.toggle_button.setObjectName("Toggle") # 添加对象名以便样式化
+     self.toggle_button.setCheckable(True)
+     self.toggle_button.setChecked(False)
+     self.toggle_button.setFixedSize(QSize(20, 20))
+
+     self.title_label = QLabel(title)
+     self.title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+     title_layout.addWidget(self.toggle_button)
+     title_layout.addWidget(self.title_label)
+     title_layout.addStretch()
+
+     # 可折叠的内容区域（放按钮）
+     self.content_widget = QWidget() 
+     self.content_layout = QVBoxLayout(self.content_widget) # 按钮在此垂直排列
+     self.content_layout.setContentsMargins(5, 0, 0, 0)
+     self.content_layout.setSpacing(3)
+
+     main_layout.addWidget(title_bar)
+     main_layout.addWidget(self.content_widget)
+
+     self.toggle_button.toggled.connect(self.toggle)
 
     def add_tool_widget(self, widget):
         self.content_layout.addWidget(widget)
@@ -44,14 +56,12 @@ class CollapsibleHeader(QWidget):
         self.is_collapsed = checked
         if checked:
             self.toggle_button.setText(">")
-            self.title_label.setVisible(False)
             self.content_widget.setVisible(False)
         else:
             self.toggle_button.setText("v")
-            self.title_label.setVisible(True)
             self.content_widget.setVisible(True)
 
-# --- END: 新增控件 ---
+# --- END ---
 
 
 class PreviewPanel(QWidget):

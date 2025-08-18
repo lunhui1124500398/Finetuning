@@ -63,6 +63,8 @@ class ImageCanvas(QGraphicsView):
         self._is_drawing_selection = False
         self._is_panning = False
         self._pan_start_pos = QPointF()
+        # 【新增 Q4】用于标记鼠标是否悬浮在画布上准备绘图        
+        self._is_hovering_to_draw = False
         
         # 蚂蚁线动画
         self.ant_offset = 0
@@ -87,17 +89,14 @@ class ImageCanvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
 
-        # 【核心修正】: 添加下面这行代码
         # 将视口更新模式设置为 FullViewportUpdate
         # 这会强制在场景发生任何变化时重绘整个视口，修复局部刷新不完整的问题
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
-
         # 禁用缓存，确保每次都重新绘制图元，而不是使用可能过期的缓存版本
         self.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)
 
     @pyqtSlot(int)
     def load_image(self, index):
-        # ...
         debugger.log(f"--- Loading image index: {index} ---") # 替换 print
 
         if index < 0:
@@ -138,7 +137,6 @@ class ImageCanvas(QGraphicsView):
         
         self.setSceneRect(self._original_item.boundingRect())
         self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
         self.scene.update()  # 确保场景立即更新
 
     def _prepare_for_drawing(self):
@@ -171,9 +169,9 @@ class ImageCanvas(QGraphicsView):
 
         # 1. 更新传统的颜色叠加/轮廓 (用于参考)
         style = self.model.mask_display_style
-
+        self.update_display_pixmap()
         # 确保原始图像被显示
-        self._original_item.setPixmap(self._original_pixmap)
+        # self._original_item.setPixmap(self._original_pixmap)
 
         if style == "area":
             self._selection_item.setPath(QPainterPath()) # 面积模式不显示蚂蚁线
@@ -183,46 +181,51 @@ class ImageCanvas(QGraphicsView):
             # 从当前选区路径生成用于显示的pixmap
             mask_pixmap = self.get_pixmap_from_path()
 
+            # 【修复 Q1】创建一个透明背景板，而不是默认的黑色背景
+            transparent_bg = QPixmap(self._original_pixmap.size())
+            transparent_bg.fill(Qt.GlobalColor.transparent)
+
             overlay = self.image_manager.create_overlay_pixmap(
-                QPixmap(self._original_pixmap.size()), mask_pixmap, 'area', area_color_rgba,
+                transparent_bg, mask_pixmap, 'area', area_color_rgba,
                 invert=self.model.mask_invert
             )
             self._mask_overlay_item.setPixmap(overlay)
         else: # contour 模式
             self._mask_overlay_item.setPixmap(QPixmap()) # 轮廓模式用蚂蚁线代替
-            # 2. 更新蚂蚁线选区
-            pen_white = QPen(Qt.GlobalColor.white, 1, Qt.PenStyle.CustomDashLine)
-            pen_white.setDashPattern([5, 5])
-            pen_white.setDashOffset(self.ant_offset)
+            # # 2. 更新蚂蚁线选区
+            # pen_white = QPen(Qt.GlobalColor.white, 1, Qt.PenStyle.CustomDashLine)
+            # pen_white.setDashPattern([5, 5])
+            # pen_white.setDashOffset(self.ant_offset)
             # 蚂蚁线效果需要双层画笔
             # QGraphicsPathItem 只支持一个pen, 我们在paint里自己画
             self._selection_item.setPath(self._selection_path)
+            self.scene.update()
 
-            # [调试用]
-            self._mask_overlay_item.setPixmap(QPixmap()) # 清空旧的叠加
-            # 从配置文件读取颜色和粗细
-            contour_color_str = self.model.config['Colors'].get('contour_line_color', '0,255,0,255')
-            contour_color_rgba = tuple(map(int, contour_color_str.split(',')))
-            contour_thickness = self.model.config['Colors'].getint('contour_thickness', 1)
-            # 调用 image_manager 来创建包含轮廓的 Pixmap
-            # 注意：这里 original_pixmap 我们传一个空的，因为我们只想得到轮廓层
-            # self._current_mask_pixmap 是我们想要处理的二值图
-            # 创建一个保证透明的背景板
-            transparent_bg = QPixmap(self._original_pixmap.size())
-            transparent_bg.fill(Qt.GlobalColor.transparent)
+            # # [调试用]
+            # self._mask_overlay_item.setPixmap(QPixmap()) # 清空旧的叠加
+            # # 从配置文件读取颜色和粗细
+            # contour_color_str = self.model.config['Colors'].get('contour_line_color', '0,255,0,255')
+            # contour_color_rgba = tuple(map(int, contour_color_str.split(',')))
+            # contour_thickness = self.model.config['Colors'].getint('contour_thickness', 1)
+            # # 调用 image_manager 来创建包含轮廓的 Pixmap
+            # # 注意：这里 original_pixmap 我们传一个空的，因为我们只想得到轮廓层
+            # # self._current_mask_pixmap 是我们想要处理的二值图
+            # # 创建一个保证透明的背景板
+            # transparent_bg = QPixmap(self._original_pixmap.size())
+            # transparent_bg.fill(Qt.GlobalColor.transparent)
 
-            overlay_pixmap = self.image_manager.create_overlay_pixmap(
-                transparent_bg,  # 一个透明的背景
-                self._current_mask_pixmap,              # 包含形状的二值图
-                'contour',
-                contour_color_rgba,
-                contour_thickness
-            )
-            if overlay_pixmap and not overlay_pixmap.isNull():
-                 debugger.save_image(overlay_pixmap, "3_final_pixmap_before_display")
-             # 将这个最终的 Pixmap 设置到图元上
-            self._mask_overlay_item.setPixmap(overlay_pixmap)
-            self._selection_item.setPath(QPainterPath())
+            # overlay_pixmap = self.image_manager.create_overlay_pixmap(
+            #     transparent_bg,  # 一个透明的背景
+            #     self._current_mask_pixmap,              # 包含形状的二值图
+            #     'contour',
+            #     contour_color_rgba,
+            #     contour_thickness
+            # )
+            # if overlay_pixmap and not overlay_pixmap.isNull():
+            #      debugger.save_image(overlay_pixmap, "3_final_pixmap_before_display")
+            #  # 将这个最终的 Pixmap 设置到图元上
+            # self._mask_overlay_item.setPixmap(overlay_pixmap)
+            # self._selection_item.setPath(QPainterPath())
 
     def get_pixmap_from_path(self) -> QPixmap:
         """从当前 _selection_path 生成一个二值化的 QPixmap"""
@@ -261,6 +264,11 @@ class ImageCanvas(QGraphicsView):
             super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event):
+        if self._is_drawing_selection and event.button() == Qt.MouseButton.RightButton:
+            self._end_drawing(commit_selection=False)
+            event.accept()
+            return
+        
         if event.button() == Qt.MouseButton.MiddleButton:
             self._is_panning = True
             self._pan_start_pos = event.pos()
@@ -379,26 +387,37 @@ class ImageCanvas(QGraphicsView):
         
         # 绘制蚂蚁线 (重写此部分以获得双色效果)
         if self.model.show_mask and self.model.mask_display_style == 'contour' and not self._selection_path.isEmpty():
-            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             
-            pen_black = QPen(Qt.GlobalColor.black, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
-            pen_black.setDashPattern([5, 5])
-            pen_black.setDashOffset(self.ant_offset + 5)
-            
-            pen_white = QPen(Qt.GlobalColor.white, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
-            pen_white.setDashPattern([5, 5])
-            pen_white.setDashOffset(self.ant_offset)
+            # 【修改】如果鼠标悬浮准备绘制，且当前未在绘制中，则显示半透明轮廓
+            if self._is_hovering_to_draw and not self._is_drawing_selection:
+                contour_color_str = self.model.config['Colors'].get('contour_line_color', '0,255,0,255')
+                r, g, b, a = map(int, contour_color_str.split(','))
+                pen = QPen(QColor(r, g, b, 128), 1 / self.transform().m11()) # 半透明
+                painter.setPen(pen)
+                painter.drawPath(self._selection_path)
+            else: # 否则，绘制正常的蚂蚁线
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                pen_black = QPen(Qt.GlobalColor.black, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
+                pen_black.setDashPattern([5, 5])
+                pen_black.setDashOffset(self.ant_offset + 5)
+              
+                pen_white = QPen(Qt.GlobalColor.white, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
+                pen_white.setDashPattern([5, 5])
+                pen_white.setDashOffset(self.ant_offset)
 
-            painter.setPen(pen_black)
-            painter.drawPath(self._selection_path)
-            painter.setPen(pen_white)
-            painter.drawPath(self._selection_path)
-            
+                painter.setPen(pen_black)
+                painter.drawPath(self._selection_path)
+                painter.setPen(pen_white)
+                painter.drawPath(self._selection_path)
+            painter.restore()
+
     def update_cursor(self):
         if self._is_panning:
              self.setCursor(Qt.CursorShape.ClosedHandCursor)
              return
-        if self.model.mask_display_style == 'area':
+        if self.model.mask_display_style == 'area' or self._current_tool not in ["lasso", "polygon", "erase"]:
              self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
              self.setCursor(Qt.CursorShape.OpenHandCursor)
              return
@@ -423,6 +442,28 @@ class ImageCanvas(QGraphicsView):
     def enterEvent(self, event):
         super().enterEvent(event)
         self.update_cursor()
+
+        if self._original_pixmap and self.model.selection_tool in ["lasso", "polygon", "erase"]:
+            style = self.model.mask_display_style
+            is_hidden = not self.model.show_mask
+
+        if style == 'area' or is_hidden:
+            self._selection_path = QPainterPath()  # 确保在进入时清空选区路径
+            if self._current_mask_pixmap:
+                self._current_mask_pixmap.fill(Qt.GlobalColor.black)  # 确保是一个空图层
+            self.update_selection_display()
+            self.model.mask_updated.emit()
+
+        elif style == 'contour':
+            self._is_hovering_to_draw = True
+            self.scene.update()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        # 鼠标离开取消高亮
+        if self._is_hovering_to_draw:
+            self._is_hovering_to_draw = False
+            self.scene.update()
 
     # --- 公共方法 ---
     @pyqtSlot(bool)
