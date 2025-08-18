@@ -1,45 +1,84 @@
-from PyQt6.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QMessageBox
-from PyQt6.QtCore import Qt, pyqtSlot, QPointF
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush, QCursor #引入qcursor
+# Finetuning/ui/widgets/image_canvas.py
+
+from PyQt6.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QMessageBox, QGraphicsPathItem
+from PyQt6.QtCore import Qt, pyqtSlot, QPointF, pyqtSignal, QTimer
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QCursor, QPainterPath, QPolygonF, QImage
 import os
+from Finetuning.utils.debugger import debugger   # 导入调试器
+
+# --- 从Demo中借鉴并优化的光标创建函数 ---
+def create_cursor(text):
+    pixmap = QPixmap(32, 32)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    center_x, center_y = 15, 15
+    line_len = 10
+    painter.setPen(QPen(Qt.GlobalColor.black, 3, Qt.PenStyle.SolidLine))
+    painter.drawLine(center_x - line_len, center_y, center_x + line_len, center_y)
+    painter.drawLine(center_x, center_y - line_len, center_x, center_y + line_len)
+    painter.setPen(QPen(Qt.GlobalColor.white, 1, Qt.PenStyle.SolidLine))
+    painter.drawLine(center_x - line_len, center_y, center_x + line_len, center_y)
+    painter.drawLine(center_x, center_y - line_len, center_x, center_y + line_len)
+    font = painter.font()
+    font.setPixelSize(14)
+    font.setBold(True)
+    painter.setFont(font)
+    rect = pixmap.rect().adjusted(2, 2, -2, -2)
+    painter.setPen(Qt.GlobalColor.black)
+    painter.drawText(rect.translated(1, 1), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom, text)
+    painter.setPen(Qt.GlobalColor.white)
+    painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom, text)
+    painter.end()
+    return QCursor(pixmap, center_x, center_y)
+
 
 class ImageCanvas(QGraphicsView):
-    """核心画布，用于显示和编辑图像/Mask。"""
+    save_and_next_requested = pyqtSignal()
+
     def __init__(self, model, image_manager, parent=None):
         super().__init__(parent)
         self.model = model
         self.image_manager = image_manager
-        self._original_pixmap = None # 保存未经修改的原始Pixmap
-        self._contrast_pixmap = None # 保存高对比度后的Pixmap
-        self._mask_pixmap = None
         
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
 
-        # 图像和Mask的图元
+        # 图元
         self._original_item = QGraphicsPixmapItem()
-        self._mask_item = QGraphicsPixmapItem()
+        self._selection_item = QGraphicsPathItem() # 用于显示蚂蚁线
+        self._mask_overlay_item = QGraphicsPixmapItem() # 用于显示旧的颜色叠加
         self.scene.addItem(self._original_item)
-        self.scene.addItem(self._mask_item)
+        self.scene.addItem(self._mask_overlay_item)
+        self.scene.addItem(self._selection_item)
 
         # 状态变量
-        self._mask_pixmap = None
-        self._is_drawing = False
-        self.last_draw_point = None
-        self._is_panning = False 
+        self._original_pixmap = None
+        self._contrast_pixmap = None
+        self._current_mask_pixmap = None # 用于加载和显示旧的mask
+
+        # --- START: 选区工具状态 ---
+        self._selection_path = QPainterPath()
+        self._temp_drawing_points = []
+        self._current_tool = 'lasso'
+        self._is_drawing_selection = False
+        self._is_panning = False
         self._pan_start_pos = QPointF()
-
-        # 【新增】 用于光标预览的状态
-        self._preview_cursor_pos = None
-        self._show_preview_cursor = False
-
-        self.draw_cursor = QCursor(Qt.CursorShape.CrossCursor)
-        self.erase_cursor = QCursor(Qt.CursorShape.CrossCursor) # 可自定义
-        self.setCursor(self.draw_cursor) # 默认
         
-        # 允许鼠标跟踪以实时更新光标预览
+        # 蚂蚁线动画
+        self.ant_offset = 0
+        self.ant_timer = QTimer(self)
+        self.ant_timer.timeout.connect(self.animate_ants)
+        self.ant_timer.start(100)
+        
+        # 自定义光标
+        self.cursors = {
+            'add': create_cursor('+'),
+            'subtract': create_cursor('−'),
+            'default': QCursor(Qt.CursorShape.CrossCursor)
+        }
+        # --- END: 选区工具状态 ---
+        
         self.setMouseTracking(True)
-        
         self.init_ui()
 
     def init_ui(self):
@@ -48,181 +87,218 @@ class ImageCanvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
 
+        # 【核心修正】: 添加下面这行代码
+        # 将视口更新模式设置为 FullViewportUpdate
+        # 这会强制在场景发生任何变化时重绘整个视口，修复局部刷新不完整的问题
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+
+        # 禁用缓存，确保每次都重新绘制图元，而不是使用可能过期的缓存版本
+        self.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)
+
     @pyqtSlot(int)
     def load_image(self, index):
+        # ...
+        debugger.log(f"--- Loading image index: {index} ---") # 替换 print
+
         if index < 0:
             self.scene.clear()
             self._original_item = QGraphicsPixmapItem()
-            self._mask_item = QGraphicsPixmapItem()
+            self._mask_overlay_item = QGraphicsPixmapItem()
+            self._selection_item = QGraphicsPathItem()
             self.scene.addItem(self._original_item)
-            self.scene.addItem(self._mask_item)
+            self.scene.addItem(self._mask_overlay_item)
+            self.scene.addItem(self._selection_item)
             return
         
-        # (V3.0新增) 重置缓存
         self._contrast_pixmap = None
+        self._selection_path = QPainterPath() # 切换图片时清空选区
+        self._is_drawing_selection = False
+        self._temp_drawing_points = []
 
-        # 加载原图
         original_path = self.model._original_files[index]
         self._original_pixmap = self.image_manager.load_pixmap(original_path)
         if not self._original_pixmap:
             print(f"Failed to load original image: {original_path}")
             return
         
-        # self._original_item.setPixmap(original_pixmap)
-        # 根据高对比度状态决定显示哪个pixmap
         self.update_display_pixmap()
 
-        # 加载或创建Mask
+        # 加载参考Mask (用于显示)
+        self._current_mask_pixmap = None
         if self.model._mask_files and index < len(self.model._mask_files):
-            self._mask_pixmap = self.image_manager.load_pixmap(self.model._mask_files[index])
+            self._current_mask_pixmap = self.image_manager.load_pixmap(self.model._mask_files[index])
+        if self._current_mask_pixmap is None or self._current_mask_pixmap.size() != self._original_pixmap.size():
+             self._current_mask_pixmap = QPixmap(self._original_pixmap.size())
+             self._current_mask_pixmap.fill(Qt.GlobalColor.black)
         
-        # 如果没有加载到mask，或者mask尺寸不对，就创建一个新的
-        if self._mask_pixmap is None or self._mask_pixmap.size() != self._original_pixmap.size():
-            self._mask_pixmap = QPixmap(self._original_pixmap.size())
-            self._mask_pixmap.fill(Qt.GlobalColor.black)
+        if self._current_mask_pixmap:
+            debugger.save_image(self._current_mask_pixmap, f"1_input_mask_index_{index}")
 
-        self.update_mask_item()
+        self.update_selection_display()
         
         self.setSceneRect(self._original_item.boundingRect())
-        # fitInView应该在显示后调用，可以移到showEvent中或在需要时手动调用
         self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-    
-    @pyqtSlot(bool)
-    def set_high_contrast(self, enabled):
-        """响应高对比度模式切换"""
-        self.update_display_pixmap()
-        self.update() # 强制重绘
 
-    def update_display_pixmap(self):
-        """根据高对比度状态更新主画布显示的图像"""
-        if self.model.high_contrast:
-            if not self._contrast_pixmap: # 如果还没有生成过，就生成一次
-                self._contrast_pixmap = self.image_manager.apply_clahe(self._original_pixmap)
-            self._original_item.setPixmap(self._contrast_pixmap)
-        else:
-            self._original_item.setPixmap(self._original_pixmap)
+        self.scene.update()  # 确保场景立即更新
 
-    @pyqtSlot(bool)
-    def set_mask_visibility(self, visible):
-        """【修改 #3】在设置为可见时，强制刷新mask视图"""
-        self._mask_item.setVisible(visible)
-        if visible:
-            self.update_mask_item()
+    def _prepare_for_drawing(self):
+        """核心逻辑：根据当前状态准备开始绘制选区"""
+        # 1. 面积模式 -> 轮廓模式
+        if self.model.mask_display_style == 'area':
+            self.model.set_mask_display_style('contour')
+            # 切换后，下面的逻辑会继续执行
+        
+        # 2. 轮廓模式 -> 选区路径
+        if self.model.mask_display_style == 'contour' and self._selection_path.isEmpty():
+            if self._current_mask_pixmap:
+                 self._selection_path = self.image_manager.convert_mask_to_path(self._current_mask_pixmap)
 
-    
-    @pyqtSlot(str)
-    def set_drawing_mode(self, mode):
-        if mode in ["draw", "erase"]:
-            # 进入绘图/橡皮模式时，禁用默认的左键拖拽
-            self.setDragMode(QGraphicsView.DragMode.NoDrag)
-            if mode == "draw":
-                self.setCursor(self.draw_cursor)
-            else:
-                self.setCursor(self.erase_cursor)
-        else: # 如果未来有"pan"模式
-             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-             self.setCursor(Qt.CursorShape.OpenHandCursor)
+        # 3. Mask不显示 -> 自动显示
+        if not self.model.show_mask:
+            self.model.set_show_mask(True)
+            if self._selection_path.isEmpty():
+                 self._current_mask_pixmap.fill(Qt.GlobalColor.black) # 确保是一个空图层
 
-    def update_mask_item(self):
-        if not self.model.show_mask or not self._mask_pixmap:
-            self._mask_item.setPixmap(QPixmap())
+        # 4. 统一更新显示
+        self.update_selection_display()
+
+    def update_selection_display(self):
+        """统一更新画布上的所有遮罩和选区显示"""
+        if not self.model.show_mask or not self._original_pixmap:
+            self._mask_overlay_item.setPixmap(QPixmap())
+            self._selection_item.setPath(QPainterPath())
             return
 
-        # 从配置中获取颜色和样式
+        # 1. 更新传统的颜色叠加/轮廓 (用于参考)
         style = self.model.mask_display_style
-        invert = self.model.mask_invert
 
-        area_color_str = self.model.config['Colors'].get('mask_overlay_color', '255,0,0,100')
-        area_color_rgba = tuple(map(int, area_color_str.split(',')))
+        # 确保原始图像被显示
+        self._original_item.setPixmap(self._original_pixmap)
 
-        contour_color_str = self.model.config['Colors'].get('contour_line_color', '0,255,0,255')
-        contour_color_rgba = tuple(map(int, contour_color_str.split(',')))
+        if style == "area":
+            self._selection_item.setPath(QPainterPath()) # 面积模式不显示蚂蚁线
+            area_color_str = self.model.config['Colors'].get('mask_overlay_color', '255,0,0,100')
+            area_color_rgba = tuple(map(int, area_color_str.split(',')))
+            
+            # 从当前选区路径生成用于显示的pixmap
+            mask_pixmap = self.get_pixmap_from_path()
 
-        # (新增) 为内轮廓获取颜色，如果未定义，则使用与外轮廓相同的颜色
-        inner_color_str = self.model.config['Colors'].get('inner_contour_color', contour_color_str)
-        inner_color_rgba = tuple(map(int, inner_color_str.split(',')))
+            overlay = self.image_manager.create_overlay_pixmap(
+                QPixmap(self._original_pixmap.size()), mask_pixmap, 'area', area_color_rgba,
+                invert=self.model.mask_invert
+            )
+            self._mask_overlay_item.setPixmap(overlay)
+        else: # contour 模式
+            self._mask_overlay_item.setPixmap(QPixmap()) # 轮廓模式用蚂蚁线代替
+            # 2. 更新蚂蚁线选区
+            pen_white = QPen(Qt.GlobalColor.white, 1, Qt.PenStyle.CustomDashLine)
+            pen_white.setDashPattern([5, 5])
+            pen_white.setDashOffset(self.ant_offset)
+            # 蚂蚁线效果需要双层画笔
+            # QGraphicsPathItem 只支持一个pen, 我们在paint里自己画
+            self._selection_item.setPath(self._selection_path)
 
-        thickness = self.model.config['Colors'].getint('contour_thickness', 2)
+            # [调试用]
+            self._mask_overlay_item.setPixmap(QPixmap()) # 清空旧的叠加
+            # 从配置文件读取颜色和粗细
+            contour_color_str = self.model.config['Colors'].get('contour_line_color', '0,255,0,255')
+            contour_color_rgba = tuple(map(int, contour_color_str.split(',')))
+            contour_thickness = self.model.config['Colors'].getint('contour_thickness', 1)
+            # 调用 image_manager 来创建包含轮廓的 Pixmap
+            # 注意：这里 original_pixmap 我们传一个空的，因为我们只想得到轮廓层
+            # self._current_mask_pixmap 是我们想要处理的二值图
+            # 创建一个保证透明的背景板
+            transparent_bg = QPixmap(self._original_pixmap.size())
+            transparent_bg.fill(Qt.GlobalColor.transparent)
 
-        # 创建一个透明的底图用于叠加
-        base_pixmap = QPixmap(self._mask_pixmap.size())
-        base_pixmap.fill(Qt.GlobalColor.transparent)
+            overlay_pixmap = self.image_manager.create_overlay_pixmap(
+                transparent_bg,  # 一个透明的背景
+                self._current_mask_pixmap,              # 包含形状的二值图
+                'contour',
+                contour_color_rgba,
+                contour_thickness
+            )
+            if overlay_pixmap and not overlay_pixmap.isNull():
+                 debugger.save_image(overlay_pixmap, "3_final_pixmap_before_display")
+             # 将这个最终的 Pixmap 设置到图元上
+            self._mask_overlay_item.setPixmap(overlay_pixmap)
+            self._selection_item.setPath(QPainterPath())
 
-        # 直接调用 image_manager 的强大方法
-        final_overlay = self.image_manager.create_overlay_pixmap(
-            base_pixmap,
-            self._mask_pixmap,
-            style,
-            area_color_rgba if style == 'area' else contour_color_rgba,
-            thickness,
-            invert,
-            inner_color_rgba
-        )
-
-        self._mask_item.setPixmap(final_overlay)
+    def get_pixmap_from_path(self) -> QPixmap:
+        """从当前 _selection_path 生成一个二值化的 QPixmap"""
+        if self._original_pixmap is None: return QPixmap()
         
+        mask_image = QImage(self._original_pixmap.size(), QImage.Format.Format_Grayscale8)
+        mask_image.fill(Qt.GlobalColor.black)
+        
+        painter = QPainter(mask_image)
+        painter.setBrush(Qt.GlobalColor.white)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPath(self._selection_path)
+        painter.end()
+        
+        return QPixmap.fromImage(mask_image)
+        
+    def animate_ants(self):
+        self.ant_offset = (self.ant_offset + 1) % 10
+        if self.model.mask_display_style == 'contour':
+            # 触发 QGraphicsPathItem 的重绘
+            self.scene.update(self._selection_item.boundingRect())
+
+    # --- 事件处理 (大量借鉴Demo) ---
     def wheelEvent(self, event):
-        """鼠标滚轮缩放"""
-        zoom_in_factor = 1.25
-        zoom_out_factor = 1 / zoom_in_factor
-        
-        if event.angleDelta().y() > 0:
-            self.scale(zoom_in_factor, zoom_in_factor)
-        else:
-            self.scale(zoom_out_factor, zoom_out_factor)
+        zoom_factor = 1.25 if event.angleDelta().y() > 0 else 1 / 1.25
+        self.scale(zoom_factor, zoom_factor)
 
-    # In /ui/widgets/image_canvas.py
+    def mouseDoubleClickEvent(self, event):
+        if self._current_tool == 'polygon' and len(self._temp_drawing_points) > 2:
+            self._end_drawing(commit_selection=True)
+            event.accept()
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self.save_and_next_requested.emit()
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event):
-        # 中键拖拽逻辑 (解决问题 #6)
         if event.button() == Qt.MouseButton.MiddleButton:
             self._is_panning = True
             self._pan_start_pos = event.pos()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
-            self._show_preview_cursor = False # 拖动时隐藏预览圈
-            self.viewport().update()
             event.accept()
             return
         
-
-        # 左键绘图逻辑
-        if event.button() == Qt.MouseButton.LeftButton and self._original_item.pixmap():
-            # 阻止在面积模式下绘图 (解决问题 #2)
-            if self.model.mask_display_style == 'area':
-                QMessageBox.information(self, "提示", "请切换到“轮廓”显示方式以进行绘制。")
-                # 依然允许默认的拖拽事件
-                super().mousePressEvent(event)
-                return
-
-            # 处理在隐藏Mask时开始绘制的情况 (解决问题 #4)
-            if not self.model.show_mask:
-                # 自动清空并显示，不再弹窗
-                if self._mask_pixmap:
-                    self.push_undo_state()
-                    self._mask_pixmap.fill(Qt.GlobalColor.black)
-                
-                self.model.set_show_mask(True)
-                if self.model.mask_display_style != 'contour':
-                    self.model.set_mask_display_style('contour')
-
-                # if self._mask_pixmap:
-                #     self.push_undo_state()
-                #     self._mask_pixmap.fill(Qt.GlobalColor.black)
-                
-                # self.model.set_show_mask(True)
-
-            # --- 开始绘制 ---
-            self._is_drawing = True
-            self.push_undo_state()
-            self.last_draw_point = None
-            self.draw_on_mask(event.pos())
-            event.accept()
+        if event.button() != Qt.MouseButton.LeftButton or not self._original_pixmap:
+            super().mousePressEvent(event)
             return
-            
-        super().mousePressEvent(event)
+
+        # 核心逻辑：准备画布
+        self._prepare_for_drawing()
+        
+        if self.model.mask_display_style == 'area':
+             # 此时已自动切换到 contour，但需要用户再次点击开始
+             return
+        
+        self.push_undo_state() # 记录操作前状态
+        self._is_drawing_selection = True
+        scene_pos = self.mapToScene(event.pos())
+
+        if self._current_tool == 'lasso' or self._current_tool == 'erase':
+            self._temp_drawing_points = [scene_pos]
+        elif self._current_tool == 'polygon':
+            if len(self._temp_drawing_points) > 1 and \
+               (scene_pos - self._temp_drawing_points[0]).manhattanLength() < 15 / self.transform().m11():
+                self._end_drawing(commit_selection=True)
+            else:
+                self._temp_drawing_points.append(scene_pos)
+        
+        self.scene.update()
+        event.accept()
 
     def mouseMoveEvent(self, event):
-        # 中键拖拽移动 (解决问题 #6)
+        self.update_cursor()
+        scene_pos = self.mapToScene(event.pos())
+
         if self._is_panning:
             delta = event.pos() - self._pan_start_pos
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
@@ -230,165 +306,190 @@ class ImageCanvas(QGraphicsView):
             self._pan_start_pos = event.pos()
             event.accept()
             return
-
-        # 左键绘图移动
-        if self._is_drawing:
-            self.draw_on_mask(event.pos())
-            event.accept()
-            return
         
-        # 【新增 #2】 更新预览光标位置
-        self._preview_cursor_pos = event.pos()
-        if self._show_preview_cursor:
-            self.viewport().update() # 触发paintEvent重绘
-            
+        if self._is_drawing_selection and (self._current_tool == 'lasso' or self._current_tool == 'erase'):
+            self._temp_drawing_points.append(scene_pos)
+        
+        self.scene.update() # For polygon tool's rubber band line
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        # 中键拖拽释放 (解决问题 #6)
         if event.button() == Qt.MouseButton.MiddleButton:
             self._is_panning = False
-            # 恢复到当前模式应有的光标和拖拽设置
-            self.set_drawing_mode(self.model.drawing_mode)
-            self._show_preview_cursor = True # 恢复预览圈显示
+            self.update_cursor()
             event.accept()
             return
 
-        # 左键绘图释放
-        if event.button() == Qt.MouseButton.LeftButton and self._is_drawing:
-            self._is_drawing = False
-            self.last_draw_point = None
-            self._show_preview_cursor = True # 恢复预览圈显示
-            self.viewport().update()
-            if self.model.auto_save:
-                self.save_current_mask()
+        if self._is_drawing_selection and (self._current_tool == 'lasso' or self._current_tool == 'erase'):
+            self._end_drawing(commit_selection=True)
             event.accept()
-            return
-
+        
         super().mouseReleaseEvent(event)
-    
-    # 【新增 #2】 处理鼠标进入/离开画布区域的事件
-    def enterEvent(self, event):
-        self._show_preview_cursor = True
-        self.viewport().update()
-        super().enterEvent(event)
 
-    def leaveEvent(self, event):
-        self._show_preview_cursor = False
-        self.viewport().update()
-        super().leaveEvent(event)
-
-    # 【新增 #2】 重写paintEvent以绘制预览光标
-    def paintEvent(self, event):
-        super().paintEvent(event) # 先执行默认的绘制
-        
-        if self._show_preview_cursor and self._preview_cursor_pos and self.model.drawing_mode in ["draw", "erase"]:
-            painter = QPainter(self.viewport())
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            
-            mode = self.model.drawing_mode
-            modifiers = QApplication.keyboardModifiers()
-            if modifiers == Qt.KeyboardModifier.AltModifier:
-                mode = "erase"
-            elif modifiers == Qt.KeyboardModifier.ShiftModifier:
-                mode = "draw"
-
-            if mode == "draw":
-                size = self.model.config['Drawing'].getint('brush_size', 3)
-                color = QColor(0, 255, 0, 120) # 绿色半透明
-            else: # erase
-                size = self.model.config['Drawing'].getint('eraser_size', 10)
-                color = QColor(255, 0, 0, 120) # 红色半透明
-
-            # 根据当前视图缩放比例调整预览圈大小
-            scale = self.transform().m11()
-            radius = (size / 2.0) * scale
-
-            painter.setPen(QPen(color, 1))
-            painter.setBrush(QColor(color.red(), color.green(), color.blue(), 50)) # 更淡的填充
-            painter.drawEllipse(QPointF(self._preview_cursor_pos), radius, radius)
-
-
-    def draw_on_mask(self, view_pos):
-        scene_pos = self.mapToScene(view_pos)
-        item_pos = self._original_item.mapFromScene(scene_pos)
-        
-        # 【修改 #7.1, #7.2】 根据键盘修饰符 (Alt/Shift) 动态决定绘制模式
+    def _get_current_modifier(self):
         modifiers = QApplication.keyboardModifiers()
+        if self.model.selection_tool == 'erase':
+             return 'subtract'
+        if modifiers == Qt.KeyboardModifier.ShiftModifier:
+            return 'add'
+        elif modifiers in [Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.ControlModifier]:
+            return 'subtract'
+        return 'new'
+
+    def _end_drawing(self, commit_selection=True):
+        if not self._is_drawing_selection: return
+
+        if commit_selection and len(self._temp_drawing_points) >= 3:
+            poly = QPolygonF(self._temp_drawing_points)
+            path = QPainterPath()
+            path.addPolygon(poly)
+            path.closeSubpath()
+            
+            modifier = self._get_current_modifier()
+            if modifier == 'new':
+                self._selection_path = path
+            elif modifier == 'add':
+                self._selection_path = self._selection_path.united(path)
+            elif modifier == 'subtract':
+                self._selection_path = self._selection_path.subtracted(path)
+            
+            self.model.mask_updated.emit()
+
+        self._is_drawing_selection = False
+        self._temp_drawing_points = []
+        self.scene.update()
+
+    # --- 覆盖 paintEvent 来绘制临时的线和蚂蚁线 ---
+    def drawForeground(self, painter, rect):
+        super().drawForeground(painter, rect)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 绘制正在进行中的选区线 (如多边形的橡皮筋)
+        if self._is_drawing_selection and self._temp_drawing_points:
+            pen = QPen(Qt.GlobalColor.cyan, 1 / self.transform().m11(), Qt.PenStyle.DotLine)
+            painter.setPen(pen)
+            
+            points_f = self._temp_drawing_points
+            if len(points_f) > 1:
+                painter.drawPolyline(QPolygonF(points_f))
+            
+            if self._current_tool == 'polygon' and self.underMouse():
+                 mouse_pos = self.mapToScene(self.mapFromGlobal(QCursor.pos()))
+                 painter.drawLine(points_f[-1], mouse_pos)
         
-        effective_mode = self.model.drawing_mode
-        if modifiers == Qt.KeyboardModifier.AltModifier:
-            effective_mode = "erase" # 按住Alt强制为橡皮
-        elif modifiers == Qt.KeyboardModifier.ShiftModifier:
-            effective_mode = "draw"  # 按住Shift强制为画笔
+        # 绘制蚂蚁线 (重写此部分以获得双色效果)
+        if self.model.show_mask and self.model.mask_display_style == 'contour' and not self._selection_path.isEmpty():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            
+            pen_black = QPen(Qt.GlobalColor.black, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
+            pen_black.setDashPattern([5, 5])
+            pen_black.setDashOffset(self.ant_offset + 5)
+            
+            pen_white = QPen(Qt.GlobalColor.white, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
+            pen_white.setDashPattern([5, 5])
+            pen_white.setDashOffset(self.ant_offset)
 
-        if effective_mode == "draw":
-            brush_size = self.model.config['Drawing'].getint('brush_size', 3)
-            color = Qt.GlobalColor.white
-        else: # erase
-            brush_size = self.model.config['Drawing'].getint('eraser_size', 15)
-            color = Qt.GlobalColor.black
+            painter.setPen(pen_black)
+            painter.drawPath(self._selection_path)
+            painter.setPen(pen_white)
+            painter.drawPath(self._selection_path)
+            
+    def update_cursor(self):
+        if self._is_panning:
+             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+             return
+        if self.model.mask_display_style == 'area':
+             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+             self.setCursor(Qt.CursorShape.OpenHandCursor)
+             return
 
-        painter = QPainter(self._mask_pixmap)
-        pen = QPen(color, brush_size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-
-        if self.last_draw_point:
-            painter.drawLine(self.last_draw_point, item_pos)
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        modifier = self._get_current_modifier()
+        if modifier == 'add':
+            self.setCursor(self.cursors['add'])
+        elif modifier == 'subtract':
+            self.setCursor(self.cursors['subtract'])
         else:
-            painter.drawPoint(item_pos)
-        self.last_draw_point = item_pos
-        painter.end()
+            self.setCursor(self.cursors['default'])
 
-        self.update_mask_item()
-        self.model.mask_updated.emit()
-    
-    def clear_current_mask(self):
-        if self._mask_pixmap:
-            # (新增) 在清除前记录撤销状态
-            self.push_undo_state() # <-- B.8中会实现
-            self._mask_pixmap.fill(Qt.GlobalColor.black)
-            self.update_mask_item()
+    def keyPressEvent(self, event):
+        super().keyPressEvent(event)
+        self.update_cursor()
+
+    def keyReleaseEvent(self, event):
+        super().keyReleaseEvent(event)
+        self.update_cursor()
+        
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.update_cursor()
+
+    # --- 公共方法 ---
+    @pyqtSlot(bool)
+    def set_high_contrast(self, enabled):
+        self.update_display_pixmap()
+
+    def update_display_pixmap(self):
+        if self.model.high_contrast:
+            if not self._contrast_pixmap:
+                self._contrast_pixmap = self.image_manager.apply_clahe(self._original_pixmap)
+            self._original_item.setPixmap(self._contrast_pixmap)
+        else:
+            self._original_item.setPixmap(self._original_pixmap)
+
+    @pyqtSlot(bool)
+    def set_selection_visibility(self, visible):
+        self.update_selection_display()
+
+    @pyqtSlot(str)
+    def set_tool(self, tool):
+        self._end_drawing(commit_selection=False)
+        self._current_tool = tool
+        self.update_cursor()
+
+    def clear_current_selection(self):
+        if not self._selection_path.isEmpty():
+            self.push_undo_state()
+            self._selection_path = QPainterPath()
+            self.update_selection_display()
             self.model.mask_updated.emit()
             if self.model.auto_save:
                 self.save_current_mask()
-            self.setFocus() #(新增)清楚后恢复焦点
-                
-    def save_current_mask(self):
-        """【修改 #7.3】增加返回值，用于判断是否保存成功"""
-        index = self.model.current_index
-        if index < 0 or not self._mask_pixmap:
-            return False
+        self.setFocus()
             
-        mask_dir = self.model.get_path('save_path')
-        if not mask_dir:
+    def save_current_mask(self):
+        index = self.model.current_index
+        if index < 0 or self._selection_path.isEmpty():
+            # 允许保存空mask
+            if index < 0: return False
+
+        save_dir = self.model.get_path('save_path')
+        if not save_dir:
             QMessageBox.warning(self, "保存失败", "请在路径设置中指定有效的“保存路径”！")
-            self.setFocus()
             return False
         
         original_filename = os.path.basename(self.model._original_files[index])
         mask_filename = os.path.splitext(original_filename)[0] + '.png'
-        save_path = os.path.join(mask_dir, mask_filename)
+        save_path = os.path.join(save_dir, mask_filename)
         
-        pixmap_to_save = self.image_manager.create_filled_mask(self._mask_pixmap)
+        pixmap_to_save = self.get_pixmap_from_path()
+        if self.model.mask_invert:
+            img = pixmap_to_save.toImage()
+            img.invertPixels()
+            pixmap_to_save = QPixmap.fromImage(img)
 
         self.image_manager.save_pixmap(pixmap_to_save, save_path)
         print(f"Mask saved to {save_path}")
         self.setFocus()
-        return True # 保存成功
+        return True
 
-    # 推入栈
     def push_undo_state(self):
-        if self._mask_pixmap:
-            self.model.push_undo_state(self.model.current_index, self._mask_pixmap)
+        self.model.push_undo_state(self.model.current_index, self._selection_path)
     
     def undo(self):
         last_state = self.model.pop_undo_state(self.model.current_index)
-        if last_state:
-            # (可选) 将当前状态推入redo栈
-            # self.model.push_redo_state(self.model.current_index, self._mask_pixmap)
-
-            self._mask_pixmap = last_state
-            self.update_mask_item()
+        if last_state is not None: # Can be an empty path
+            self._selection_path = last_state
+            self.update_selection_display()
             self.model.mask_updated.emit()
             print("Undo successful.")

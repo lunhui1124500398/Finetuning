@@ -41,7 +41,7 @@ class MainWindow(QMainWindow):
         self.initial_state = self.saveState()  
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V3.2")
+        self.setWindowTitle("手动抠图工具 V4.0(选区版)")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()
@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
         
         # Right Splitter (Preview + Functions)
         self.right_splitter = QSplitter(Qt.Orientation.Vertical)
-        self.preview_panel = PreviewPanel(self.model, self.image_manager)
+        self.preview_panel = PreviewPanel(self.model, self.image_manager, canvas_widget=self.canvas)
         
         # Function Frame
         function_frame = QFrame()
@@ -115,27 +115,36 @@ class MainWindow(QMainWindow):
         display_layout.addLayout(mask_style_layout)
         display_layout.addLayout(auto_options_layout)
 
-        # Edit Tools Group
+        # modify Edit Tools Group
         tools_group = QGroupBox("编辑工具")
         tools_layout = QVBoxLayout(tools_group)
         tool_buttons_layout = QHBoxLayout()
-        self.draw_button = QPushButton("画笔 (Q)")
-        self.erase_button = QPushButton("橡皮 (E)")
-        self.draw_button.setCheckable(True)
-        self.erase_button.setCheckable(True)
+        self.lasso_button = QPushButton("套索 (Q)")
+        self.polygon_button = QPushButton("多边形 (E)")
+        self.erase_selection_button = QPushButton("擦除选区")
+ 
+        self.lasso_button.setCheckable(True)
+        self.polygon_button.setCheckable(True)
+        self.erase_selection_button.setCheckable(True)
+
         self.tool_button_group = QButtonGroup(self)
-        self.tool_button_group.addButton(self.draw_button)
-        self.tool_button_group.addButton(self.erase_button)
-        self.draw_button.setChecked(True)
-        tool_buttons_layout.addWidget(self.draw_button)
-        tool_buttons_layout.addWidget(self.erase_button)
+        self.tool_button_group.addButton(self.lasso_button)
+        self.tool_button_group.addButton(self.polygon_button)
+        self.tool_button_group.addButton(self.erase_selection_button)
+        self.lasso_button.setChecked(True)
+
+        tool_buttons_layout.addWidget(self.lasso_button)
+        tool_buttons_layout.addWidget(self.polygon_button)
+        tool_buttons_layout.addWidget(self.erase_selection_button)
+
         action_buttons_layout = QVBoxLayout()
         self.clear_button = QPushButton("清除Mask (W)")
         self.save_button = QPushButton("保存 (Ctrl+S)")
-        self.save_and_next_button = QPushButton("保存并下一张 (Ctrl+N)")
+        self.save_and_next_button = QPushButton("保存并下一张 (Ctrl+N or 双击)")
         action_buttons_layout.addWidget(self.clear_button)
         action_buttons_layout.addWidget(self.save_button)
         action_buttons_layout.addWidget(self.save_and_next_button)
+        
         tools_layout.addLayout(tool_buttons_layout)
         tools_layout.addLayout(action_buttons_layout)
 
@@ -200,9 +209,11 @@ class MainWindow(QMainWindow):
         create_shortcut('next_image', self.model.increment_index)
         create_shortcut('prev_image', self.model.decrement_index)
         create_shortcut('save', self.canvas.save_current_mask)
-        create_shortcut('draw_mode', lambda: self.model.set_drawing_mode("draw"))
-        create_shortcut('erase_mode', lambda: self.model.set_drawing_mode("erase"))
-        create_shortcut('clear_mask', self.canvas.clear_current_mask)
+        # --- START: 修改快捷键 ---
+        create_shortcut('draw_mode', lambda: self.model.set_selection_tool("lasso"))
+        create_shortcut('erase_mode', lambda: self.model.set_selection_tool("polygon"))
+        create_shortcut('clear_mask', self.canvas.clear_current_selection)
+
         create_shortcut('import_files', self.import_images)
         create_shortcut('save_and_next', self.save_and_next)
 
@@ -213,60 +224,61 @@ class MainWindow(QMainWindow):
         # --- END: 核心修正 ---
 
     def _connect_signals(self):
-        # 路径与导航
         self.import_button.clicked.connect(self.import_images)
         self.prev_button.clicked.connect(self.model.decrement_index)
         self.next_button.clicked.connect(self.model.increment_index)
         self.progress_slider.slider.valueChanged.connect(self.model.set_current_index)
         
-        # 编辑操作
-        self.clear_button.clicked.connect(self.canvas.clear_current_mask)
+        # --- START: 修改信号连接 ---
+        self.clear_button.clicked.connect(self.canvas.clear_current_selection)
         self.save_button.clicked.connect(self.canvas.save_current_mask)
         self.save_and_next_button.clicked.connect(self.save_and_next)
-
-        # --- START: 核心修正 - 修正信号连接以打破递归 ---
-
-        # 1. 工具按钮: 使用 toggled 信号, 并且只在选中时触发
-        self.draw_button.toggled.connect(lambda checked: self.model.set_drawing_mode("draw") if checked else None)
-        self.erase_button.toggled.connect(lambda checked: self.model.set_drawing_mode("erase") if checked else None)
         
-        # 2. 复选框: toggled 信号直接连接到模型的 set 方法
+        self.canvas.save_and_next_requested.connect(self.save_and_next)
+
+        self.lasso_button.toggled.connect(lambda checked: self.model.set_selection_tool("lasso") if checked else None)
+        self.polygon_button.toggled.connect(lambda checked: self.model.set_selection_tool("polygon") if checked else None)
+        self.erase_selection_button.toggled.connect(lambda checked: self.model.set_selection_tool("erase") if checked else None)
+        # --- END: 修改信号连接 ---
+        
         self.show_mask_checkbox.toggled.connect(self.model.set_show_mask)
         self.auto_save_checkbox.toggled.connect(self.model.set_auto_save)
         self.high_contrast_checkbox.toggled.connect(self.model.set_high_contrast)
         self.mask_invert_checkbox.toggled.connect(self.model.set_mask_invert)
         
-        # 3. 单选按钮
         self.area_radio.toggled.connect(lambda checked: self.model.set_mask_display_style("area") if checked else None)
         self.contour_radio.toggled.connect(lambda checked: self.model.set_mask_display_style("contour") if checked else None)
         
-        # --- END: 核心修正 ---
-
-        # === 模型 -> UI (单向数据流，负责同步界面) ===
         self.model.index_changed.connect(self.on_index_changed)
         self.model.files_changed.connect(self.on_files_changed)
         
-        # 同步功能按钮/复选框的状态
-        self.model.mode_changed.connect(self.on_mode_changed)
+        # --- START: 修改信号连接 ---
+        self.model.tool_changed.connect(self.on_tool_changed)
+        # --- END: 修改信号连接 ---
         self.model.show_mask_changed.connect(self.show_mask_checkbox.setChecked)
         self.model.auto_save_changed.connect(self.auto_save_checkbox.setChecked)
         self.model.high_contrast_changed.connect(self.high_contrast_checkbox.setChecked)
-        self.model.mask_display_changed.connect(self.on_mask_display_changed) # 新增槽
+        self.model.mask_display_changed.connect(self.on_mask_display_changed)
         
-        # 同步画布
-        self.model.mask_updated.connect(self.canvas.update_mask_item)
+        # --- START: 修改画布连接 ---
+        self.model.mask_updated.connect(self.canvas.update_selection_display)
         self.model.high_contrast_changed.connect(self.canvas.set_high_contrast)
-        self.model.mask_display_changed.connect(self.canvas.update_mask_item)
-        self.model.show_mask_changed.connect(self.canvas.set_mask_visibility)
+        # self.model.mask_display_changed.connect(self.canvas.update_selection_display) # 可能会导致重复刷新
+        self.model.show_mask_changed.connect(self.canvas.set_selection_visibility)
+        # --- END: 修改画布连接 ---
+
+        self.model.mask_updated.connect(lambda: self.preview_panel.update_previews(self.model.current_index))
 
     # --- Slots for Model -> UI updates ---
     @pyqtSlot(str)
-    def on_mode_changed(self, mode):
-        self.canvas.set_drawing_mode(mode)
-        if mode == 'draw':
-            self.draw_button.setChecked(True)
-        elif mode == 'erase':
-            self.erase_button.setChecked(True)
+    def on_tool_changed(self, tool):
+        self.canvas.set_tool(tool)
+        if tool == 'lasso':
+            self.lasso_button.setChecked(True)
+        elif tool == 'polygon':
+            self.polygon_button.setChecked(True)
+        elif tool == 'erase':
+            self.erase_selection_button.setChecked(True)
 
     @pyqtSlot()
     def on_mask_display_changed(self):

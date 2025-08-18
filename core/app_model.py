@@ -2,6 +2,7 @@
 
 import configparser
 from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtGui import QPainterPath # 新增导入
 import os
 
 class AppModel(QObject):
@@ -11,7 +12,8 @@ class AppModel(QObject):
     files_changed = pyqtSignal(int)  # int: total number of files
     index_changed = pyqtSignal(int)  # int: current index
     mask_updated = pyqtSignal()      # 当Mask被修改时
-    mode_changed = pyqtSignal(str)   # str: "draw" or "erase"
+    tool_changed = pyqtSignal(str)  # str: "lasso","polygon","erase"
+    # mode_changed = pyqtSignal(str)   # str: "draw" or "erase"
     show_mask_changed = pyqtSignal(bool)
     auto_save_changed = pyqtSignal(bool)
     mask_display_changed = pyqtSignal()
@@ -41,7 +43,7 @@ class AppModel(QObject):
         self.max_undo_steps = 128
                 
         # 功能状态
-        self._drawing_mode = "draw" 
+        self._selection_tool = "lasso" 
         self._show_mask = True
         self._auto_save = False
         self._high_contrast = False
@@ -56,13 +58,16 @@ class AppModel(QObject):
             print(f"警告: 配置文件未找到或为空: {self.config_path}")
         self.config_loaded.emit()
     
-    # --- 栈方法 (省略未修改部分) ---
-    def push_undo_state(self, index, mask_pixmap):
+    # --- 栈方法 ---
+    def push_undo_state(self, index, path: QPainterPath):
         if index not in self._undo_stack:
             self._undo_stack[index] = []
         if index in self._redo_stack:
             self._redo_stack[index].clear()
-        self._undo_stack[index].append(mask_pixmap.copy())
+        
+        # QPainterPath 需要深拷贝
+        self._undo_stack[index].append(QPainterPath(path)) 
+        
         if len(self._undo_stack[index]) > self.max_undo_steps:
             self._undo_stack[index].pop(0)
 
@@ -101,19 +106,15 @@ class AppModel(QObject):
         else:
             self.set_current_index(-1)
             
-    # --- START: 核心修正 - 使用带状态检查的 set 方法 ---
-    
+    # --- START: 修改状态 ---
     @property
-    def drawing_mode(self):
-        return self._drawing_mode
+    def selection_tool(self):
+        return self._selection_tool
 
-    def set_drawing_mode(self, mode):
-        if mode in ["draw", "erase"] and self._drawing_mode != mode:
-            self._drawing_mode = mode
-            self.mode_changed.emit(mode)
-            # 联动逻辑：进入绘图/橡皮模式时，自动切换到轮廓视图以便观察
-            if self.mask_display_style != "contour":
-                self.set_mask_display_style("contour")
+    def set_selection_tool(self, tool):
+        if tool in ["lasso", "polygon", "erase"] and self._selection_tool != tool:
+            self._selection_tool = tool
+            self.tool_changed.emit(tool)
             
     @property
     def show_mask(self):
