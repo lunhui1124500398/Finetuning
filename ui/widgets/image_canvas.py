@@ -172,23 +172,77 @@ class ImageCanvas(QGraphicsView):
         # 1. 更新传统的颜色叠加/轮廓 (用于参考)
         style = self.model.mask_display_style
 
-        # 确保原始图像被显示
+        # 确保原始图像被显示(尊重高对比度设置)
         self._original_item.setPixmap(self._original_pixmap)
+        self.update_display_pixmap()
 
         if style == "area":
-            self._selection_item.setPath(QPainterPath()) # 面积模式不显示蚂蚁线
+            # 1. 获取当前显示的底图 (可能是原图，也可能是高对比度图)
+            base_pixmap = self._original_item.pixmap()
+            if not base_pixmap or base_pixmap.isNull(): 
+                # 如果底图为空，先恢复一下
+                self.update_display_pixmap()
+                base_pixmap = self._original_item.pixmap()
+                if not base_pixmap or base_pixmap.isNull(): return
+            
+            # 2. 从当前选区路径生成用于显示的pixmap
+            mask_pixmap = self._get_display_mask()
+            if not mask_pixmap or mask_pixmap.isNull():
+                 # 如果获取不到mask，就不要继续执行，避免出错
+                 return
+            
+            # 3. 读取配置
             area_color_str = self.model.config['Colors'].get('mask_overlay_color', '255,0,0,100')
             area_color_rgba = tuple(map(int, area_color_str.split(',')))
-            
-            # 从当前选区路径生成用于显示的pixmap
-            mask_pixmap = self.get_pixmap_from_path()
-
-            overlay = self.image_manager.create_overlay_pixmap(
-                QPixmap(self._original_pixmap.size()), mask_pixmap, 'area', area_color_rgba,
+            # 4. 【核心修改】调用ImageManager生成一个包含底图和遮罩的“最终合成图”
+            composite_pixmap = self.image_manager.create_overlay_pixmap(
+                base_pixmap,  # 使用实际的底图，而不是空白图
+                mask_pixmap,
+                'area',
+                area_color_rgba,
                 invert=self.model.mask_invert
             )
-            self._mask_overlay_item.setPixmap(overlay)
+            # 5. 【核心修改】将合成图直接设置给底图图元，并清空上层遮罩
+            self._original_item.setPixmap(composite_pixmap)
+            self._mask_overlay_item.setPixmap(QPixmap()) # 清空上层，避免重复显示
+            self._selection_item.setPath(QPainterPath()) # 面积模式不显示蚂蚁线
+        
+        ## 调试代码
+        # if style == "area":
+        #     from Finetuning.utils.debugger import debugger # 确保导入
+
+        #     # 1. 获取当前显示的底图
+        #     base_pixmap = self._original_item.pixmap()
+        #     if not base_pixmap or base_pixmap.isNull(): return
+        #     debugger.save_image(base_pixmap, "debug_1_base_for_area_mode") # <-- 调试点1
+
+        #     # 2. 从当前选区路径生成用于叠加的二值化mask
+        #     mask_pixmap = self.get_pixmap_from_path()
+        #     debugger.save_image(mask_pixmap, "debug_2_mask_for_area_mode") # <-- 调试点2
+            
+        #     # 3. 读取配置
+        #     area_color_str = self.model.config['Colors'].get('mask_overlay_color', '255,0,0,100')
+        #     area_color_rgba = tuple(map(int, area_color_str.split(',')))
+
+        #     # 4. 调用ImageManager生成“最终合成图”
+        #     composite_pixmap = self.image_manager.create_overlay_pixmap(
+        #         base_pixmap,
+        #         mask_pixmap,
+        #         'area',
+        #         area_color_rgba,
+        #         invert=self.model.mask_invert
+        #     )
+        #     debugger.save_image(composite_pixmap, "debug_3_final_composite_image") # <-- 调试点3
+
+        #     # 5. 将合成图直接设置给底图图元，并清空上层遮罩
+        #     self._original_item.setPixmap(composite_pixmap)
+        #     self._mask_overlay_item.setPixmap(QPixmap()) 
+        #     self._selection_item.setPath(QPainterPath())
+
         else: # contour 模式
+            # 【重要】确保从面积模式切换回轮廓模式时，底图能恢复为原始/高对比度图
+            self.update_display_pixmap() # 恢复底图
+
             self._mask_overlay_item.setPixmap(QPixmap()) # 轮廓模式用蚂蚁线代替
             # 2. 更新蚂蚁线选区
             pen_white = QPen(Qt.GlobalColor.white, 1, Qt.PenStyle.CustomDashLine)
@@ -238,6 +292,42 @@ class ImageCanvas(QGraphicsView):
         painter.end()
         
         return QPixmap.fromImage(mask_image)
+    
+    # Finetuning/ui/widgets/image_canvas.py -> 在 ImageCanvas 类中新增此方法
+
+    def _get_display_mask(self) -> QPixmap:
+        """
+        获取用于面积模式显示的Mask。
+        该方法模仿了PreviewPanel的逻辑，确保数据来源的正确性。
+        """
+        # 优先级1: 如果当前有正在绘制的、未保存的选区，则优先使用它。
+        if not self._selection_path.isEmpty():
+            return self.get_pixmap_from_path()
+
+        index = self.model.current_index
+        if index < 0:
+            return None
+
+        # 优先级2: 尝试从“保存路径”加载已保存的Mask。
+        save_dir = self.model.get_path('save_path')
+        if save_dir and index < len(self.model._original_files):
+            original_filename = os.path.basename(self.model._original_files[index])
+            mask_filename = os.path.splitext(original_filename)[0] + '.png'
+            saved_mask_path = os.path.join(save_dir, mask_filename)
+            if os.path.exists(saved_mask_path):
+                return self.image_manager.load_pixmap(saved_mask_path)
+
+        # 优先级3: 尝试从“参考路径”加载初始Mask。
+        if self.model._mask_files and index < len(self.model._mask_files):
+            return self.image_manager.load_pixmap(self.model._mask_files[index])
+
+        # 优先级4: 如果都找不到，返回一个与底图等大的纯黑Mask。
+        if self._original_pixmap:
+            empty_pixmap = QPixmap(self._original_pixmap.size())
+            empty_pixmap.fill(Qt.GlobalColor.black)
+            return empty_pixmap
+        
+        return None
         
     def animate_ants(self):
         self.ant_offset = (self.ant_offset + 1) % 10
