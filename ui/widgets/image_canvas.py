@@ -426,25 +426,76 @@ class ImageCanvas(QGraphicsView):
             return 'subtract'
         return 'new'
 
+    # def _end_drawing(self, commit_selection=True):
+    #     if not self._is_drawing_selection: return
+
+    #     if commit_selection and len(self._temp_drawing_points) >= 3:
+    #         poly = QPolygonF(self._temp_drawing_points)
+    #         path = QPainterPath()
+    #         path.addPolygon(poly)
+    #         path.closeSubpath()
+            
+    #         modifier = self._get_current_modifier()
+    #         if modifier == 'new':
+    #             self._selection_path = path
+    #         elif modifier == 'add':
+    #             self._selection_path = self._selection_path.united(path)
+    #         elif modifier == 'subtract':
+    #             self._selection_path = self._selection_path.subtracted(path)
+            
+    #         # 在完成绘制和布尔运算后，调用新方法将路径对齐到像素网格
+    #         if self._original_pixmap and not self._original_pixmap.isNull():
+                
+    #             self._selection_path = self.image_manager.snap_path_to_pixels(
+    #                 self._selection_path, self._original_pixmap.size()
+    #             )
+
+    #         self.model.mask_updated.emit()
+
+    #     self._is_drawing_selection = False
+    #     self._temp_drawing_points = []
+    #     self.scene.update()
+
     def _end_drawing(self, commit_selection=True):
-        if not self._is_drawing_selection: return
+        if not self._is_drawing_selection:
+            return
 
         if commit_selection and len(self._temp_drawing_points) >= 3:
             poly = QPolygonF(self._temp_drawing_points)
-            path = QPainterPath()
-            path.addPolygon(poly)
-            path.closeSubpath()
-            
-            modifier = self._get_current_modifier()
-            if modifier == 'new':
-                self._selection_path = path
-            elif modifier == 'add':
-                self._selection_path = self._selection_path.united(path)
-            elif modifier == 'subtract':
-                self._selection_path = self._selection_path.subtracted(path)
-            
-            self.model.mask_updated.emit()
+            new_drawn_path = QPainterPath()
+            new_drawn_path.addPolygon(poly)
+            new_drawn_path.closeSubpath()
 
+            # 根据当前的修改键(Shift/Alt)确定操作后的候选路径
+            modifier = self._get_current_modifier()
+            candidate_path = QPainterPath()
+            if modifier == 'new':
+                candidate_path = new_drawn_path
+            elif modifier == 'add':
+                candidate_path = self._selection_path.united(new_drawn_path)
+            elif modifier == 'subtract':
+                candidate_path = self._selection_path.subtracted(new_drawn_path)
+
+            # 检查是否有有效的底图
+            if self._original_pixmap and not self._original_pixmap.isNull():
+                
+                # 调用新的处理方法，它会返回验证结果和处理后的路径
+                is_valid, final_path = self.image_manager.process_selection_path(
+                    candidate_path, self._original_pixmap.size()
+                )
+
+                if not is_valid:
+                    # 如果验证失败 (包括减去后完全为空的情况)，弹出提示，并且不更新选区。
+                    # 注意：如果路径在相减后变为空，is_valid 也将为 False，这是符合预期的行为。
+                    QMessageBox.warning(self, "提示", "选区未覆盖任何像素面积的50%以上，操作无效。")
+                    # 不更新 self._selection_path，相当于撤销了本次绘制
+                else:
+                    # 验证成功, 更新最终选区路径
+                    self._selection_path = final_path
+                    # 通知模型选区已更新，UI需要刷新
+                    self.model.mask_updated.emit()
+
+        # 无论成功与否，都重置绘制状态
         self._is_drawing_selection = False
         self._temp_drawing_points = []
         self.scene.update()

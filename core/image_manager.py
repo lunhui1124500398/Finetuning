@@ -252,3 +252,178 @@ class ImageManager:
         final_pixmap = QPixmap.fromImage(filled_qimage.convertToFormat(QImage.Format.Format_RGBA8888))
         return final_pixmap
     # --- END: 新增方法 ---
+
+    # 实现选区像素级精确对齐的关键方法
+    @staticmethod
+    def snap_path_to_pixels(path: QPainterPath, image_size) -> QPainterPath:
+        """
+        通过栅格化后再提取轮廓，将矢量路径对齐到像素网格。
+        这是实现选区像素级精确的关键。
+
+        Args:
+            path: 原始的、平滑的 QPainterPath。
+            image_size: 目标图像的尺寸 (QSize)。
+
+        Returns:
+            一个新的、与像素边界对齐的 QPainterPath。
+        """
+        if path.isEmpty() or image_size.isEmpty():
+            return QPainterPath()
+
+        # 步骤1: 将矢量路径栅格化到一个二值 QImage 上
+        # 抗锯齿(Antialiasing)可以使栅格化结果更平滑，更符合用户直觉
+        mask_image = QImage(image_size, QImage.Format.Format_Grayscale8)
+        mask_image.fill(Qt.GlobalColor.black)
+
+        painter = QPainter(mask_image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(Qt.GlobalColor.white)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPath(path)
+        painter.end()
+
+        # 步骤2: 将 QImage 转换为 Numpy 数组，以便 OpenCV 处理
+        ptr = mask_image.bits()
+        ptr.setsize(mask_image.sizeInBytes())
+        arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+
+        # 步骤3: 使用 OpenCV 查找轮廓
+        # cv2.CHAIN_APPROX_NONE 保证获取边界上的每一个像素点，确保精度
+        contours, _ = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+
+        # 步骤4: 将 OpenCV 轮廓转换回新的 QPainterPath
+        snapped_path = QPainterPath()
+        for contour in contours:
+            polygon = QPolygonF([QPointF(p[0][0], p[0][1]) for p in contour])
+            snapped_path.addPolygon(polygon)
+            snapped_path.closeSubpath() # 确保每个轮廓都是闭合的
+
+        return snapped_path
+    
+    # @staticmethod
+    # def process_selection_path(path: QPainterPath, image_size) -> tuple[bool, QPainterPath]:
+    #     """
+    #     栅格化路径，验证其是否覆盖任何像素超过50%，然后生成对齐到像素网格的新路径。
+    #     """
+    #     # 导入调试器
+    #     from Finetuning.utils.debugger import debugger
+        
+    #     debugger.log("--- Starting process_selection_path ---")
+
+    #     if path.isEmpty() or image_size.isEmpty():
+    #         return (False, QPainterPath())
+
+    #     # 步骤1: 栅格化为带抗锯齿的灰度图
+    #     mask_image = QImage(image_size, QImage.Format.Format_Grayscale8)
+    #     mask_image.fill(Qt.GlobalColor.black)
+    #     painter = QPainter(mask_image)
+    #     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    #     painter.setBrush(Qt.GlobalColor.white)
+    #     painter.setPen(Qt.PenStyle.NoPen)
+    #     painter.drawPath(path)
+    #     painter.end()
+
+    #     # 步骤2: 转换为 Numpy 数组
+    #     ptr = mask_image.bits()
+    #     ptr.setsize(mask_image.sizeInBytes())
+    #     arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+
+    #     # 【调试点 A】: 保存栅格化后的灰度图
+    #     # 这是最关键的一步，它显示了每个像素被覆盖的真实程度。
+    #     debugger.save_image(arr, "debug_1_grayscale_rasterized")
+
+    #     # 步骤3: 验证覆盖率
+    #     if not np.any(arr > 127):
+    #         debugger.log("Validation failed: No pixel covered more than 50%.")
+    #         return (False, QPainterPath())
+
+    #     # 步骤4: 阈值化为二值图
+    #     _, binary_arr = cv2.threshold(arr, 127, 255, cv2.THRESH_BINARY)
+        
+    #     # 【调试点 B】: 保存阈值化后的二值图
+    #     # 这张图应该只包含纯黑和纯白，显示了哪些像素被最终选中。
+    #     debugger.save_image(binary_arr, "debug_2_binary_after_threshold")
+
+    #     # 步骤5: 查找轮廓
+    #     contours, _ = cv2.findContours(binary_arr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        
+    #     # 【调试点 C】: 打印轮廓信息
+    #     # 看看我们找到了什么形状。
+    #     debugger.log(f"Found {len(contours)} contours.")
+    #     if contours:
+    #         # 只打印第一个轮廓的顶点数量和前5个点
+    #         debugger.log(f"Contour 0 has {len(contours[0])} vertices.")
+    #         debugger.log(f"First 5 points: {contours[0][:5].ravel()}")
+
+
+    #     # 步骤6: 转换回 QPainterPath
+    #     snapped_path = QPainterPath()
+    #     for contour in contours:
+    #         polygon = QPolygonF([QPointF(p[0][0], p[0][1]) for p in contour])
+    #         snapped_path.addPolygon(polygon)
+    #         snapped_path.closeSubpath()
+            
+    #     debugger.log("--- Finished process_selection_path ---")
+    #     return (True, snapped_path)
+
+# 请将此【最终版本】函数完整替换掉 /core/image_manager.py 中的旧函数
+
+    @staticmethod
+    def process_selection_path(path: QPainterPath, image_size) -> tuple[bool, QPainterPath]:
+        """
+        【最终版 - 直接构建像素路径】
+        通过检查每个像素的中心点是否在路径内来确定选中的像素集合，
+        然后直接由这些像素的矩形区域构建最终的、像素对齐的路径。
+        """
+        from Finetuning.utils.debugger import debugger
+        from PyQt6.QtCore import QPointF, QRectF # 确保导入 QPointF 和 QRectF
+
+        debugger.log("--- Starting FINAL process_selection_path (Direct Path Build) ---")
+
+        if path.isEmpty() or image_size.isEmpty():
+            return (False, QPainterPath())
+
+        # 步骤1: 确定需要检查的像素范围
+        height, width = image_size.height(), image_size.width()
+        bounding_rect = path.boundingRect().toRect()
+        
+        x_start = max(0, bounding_rect.left())
+        y_start = max(0, bounding_rect.top())
+        x_end = min(width, bounding_rect.right() + 1)
+        y_end = min(height, bounding_rect.bottom() + 1)
+
+        # 步骤2: 找出所有被选中的像素坐标
+        selected_pixels = []
+        for y in range(y_start, y_end):
+            for x in range(x_start, x_end):
+                # 检查像素中心 (x + 0.5, y + 0.5) 是否在用户的矢量路径内
+                if path.contains(QPointF(x + 0.5, y + 0.5)):
+                    selected_pixels.append((x, y))
+
+        # 步骤3: 如果没有选中任何像素，则操作无效
+        if not selected_pixels:
+            debugger.log("Validation failed: No pixel center was contained in the path.")
+            return (False, QPainterPath())
+
+        # 步骤4: 【核心】直接根据选中的像素构建路径
+        # 我们不再需要OpenCV来找轮廓，而是为每个选中的像素画一个1x1的方块
+        snapped_path = QPainterPath()
+        for x, y in selected_pixels:
+            # 为每个像素添加一个 1x1 的矩形
+            # QRectF(x, y, 1, 1) 代表从(x,y)开始，宽高都为1的矩形
+            snapped_path.addRect(QRectF(x, y, 1, 1))
+        
+        # 步骤 4: 【核心魔法】调用 .simplified() 方法
+        # Qt 会自动计算这个复合路径的并集，并返回一个只包含最终轮廓的新路径。
+        # 所有内部共享的边都会被自动消除。
+        final_boundary_path = snapped_path.simplified()
+
+        debugger.log(f"Path built directly from {len(selected_pixels)} selected pixels.")
+        debugger.log("--- Finished FINAL process_selection_path ---")
+        
+    
+        # 返回的 final_boundary_path 现在是所有像素块的并集，它会自动形成正确的阶梯状轮廓
+        return (True, final_boundary_path)
+
+
+    
