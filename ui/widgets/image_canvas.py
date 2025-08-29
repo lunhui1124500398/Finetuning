@@ -476,24 +476,31 @@ class ImageCanvas(QGraphicsView):
             elif modifier == 'subtract':
                 candidate_path = self._selection_path.subtracted(new_drawn_path)
 
-            # 检查是否有有效的底图
-            if self._original_pixmap and not self._original_pixmap.isNull():
-                
-                # 调用新的处理方法，它会返回验证结果和处理后的路径
-                is_valid, final_path = self.image_manager.process_selection_path(
-                    candidate_path, self._original_pixmap.size()
-                )
+            # 减选到0是可以接受的
+            if modifier == 'subtract' and candidate_path.isEmpty():
+                # 直接将选区设置为空路径
+                self._selection_path = QPainterPath()
+                # 通知模型选区已更新，UI需要刷新
+                self.model.mask_updated.emit()
+            
+            else:
+                if self._original_pixmap and not self._original_pixmap.isNull():
+                    
+                    # 调用新的处理方法，它会返回验证结果和处理后的路径
+                    is_valid, final_path = self.image_manager.process_selection_path(
+                        candidate_path, self._original_pixmap.size()
+                    )
 
-                if not is_valid:
-                    # 如果验证失败 (包括减去后完全为空的情况)，弹出提示，并且不更新选区。
-                    # 注意：如果路径在相减后变为空，is_valid 也将为 False，这是符合预期的行为。
-                    QMessageBox.warning(self, "提示", "选区未覆盖任何像素面积的50%以上，操作无效。")
-                    # 不更新 self._selection_path，相当于撤销了本次绘制
-                else:
-                    # 验证成功, 更新最终选区路径
-                    self._selection_path = final_path
-                    # 通知模型选区已更新，UI需要刷新
-                    self.model.mask_updated.emit()
+                    if not is_valid:
+                        # 如果验证失败 (包括减去后完全为空的情况)，弹出提示，并且不更新选区。
+                        # 注意：如果路径在相减后变为空，is_valid 也将为 False，这是符合预期的行为。
+                        QMessageBox.warning(self, "提示", "选区未覆盖任何像素面积的50%以上，操作无效。")
+                        # 不更新 self._selection_path，相当于撤销了本次绘制
+                    else:
+                        # 验证成功, 更新最终选区路径
+                        self._selection_path = final_path
+                        # 通知模型选区已更新，UI需要刷新
+                        self.model.mask_updated.emit()
 
         # 无论成功与否，都重置绘制状态
         self._is_drawing_selection = False
