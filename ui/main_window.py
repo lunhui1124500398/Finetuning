@@ -29,7 +29,6 @@ class MainWindow(QMainWindow):
         self._create_actions_and_shortcuts()
         self._connect_signals()
         
-        # 保存主窗口、主分割器和右侧分割器的初始状态
         self.initial_layout_states = {
             'main_window': self.saveState(),
             'main_splitter': self.main_splitter.saveState(),
@@ -37,20 +36,19 @@ class MainWindow(QMainWindow):
         }
 
         self._load_initial_settings()
-
         self.initial_state = self.saveState()  
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V4.0(选区版)")
+        self.setWindowTitle("手动抠图工具 V4.1(查看/绘制分离版)")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
 
-        # Path Dock Widget
+        # --- Path Dock Widget (无变动) ---
         self.path_dock_widget = QDockWidget("路径设置 (可拖拽)", self)
-        self.path_dock_widget.setObjectName("PathDockWidget") # 修复无名问题
+        self.path_dock_widget.setObjectName("PathDockWidget")
         self.path_dock_widget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
         path_widget = QWidget()
         path_layout = QVBoxLayout(path_widget)
@@ -67,10 +65,8 @@ class MainWindow(QMainWindow):
         self.path_dock_widget.setWidget(path_widget)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.path_dock_widget)
         
-        # Main Splitter
+        # --- Main Splitter, Canvas Area (无变动) ---
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        
-        # Canvas Area (Left)
         canvas_area = QFrame()
         canvas_area.setFrameShape(QFrame.Shape.StyledPanel)
         canvas_layout = QVBoxLayout(canvas_area)
@@ -79,64 +75,72 @@ class MainWindow(QMainWindow):
         canvas_layout.addWidget(self.canvas)
         canvas_layout.addWidget(self.progress_slider)
         
-        # Right Splitter (Preview + Functions)
+        # --- Right Splitter, Preview Panel (无变动) ---
         self.right_splitter = QSplitter(Qt.Orientation.Vertical)
         self.preview_panel = PreviewPanel(self.model, self.image_manager, canvas_widget=self.canvas)
         
-        # Function Frame
+        # --- Function Frame ---
         function_frame = QFrame()
         function_frame.setFrameShape(QFrame.Shape.StyledPanel)
         function_layout = QVBoxLayout(function_frame)
 
-        # Display Options Group
+        # --- START: 重构 Display Options Group ---
         display_group = QGroupBox("显示选项")
         display_layout = QVBoxLayout(display_group)
-        mask_options_layout = QHBoxLayout()
-        self.show_mask_checkbox = QCheckBox("显示Mask (Z)")
-        self.mask_invert_checkbox = QCheckBox("反相显示")
-        mask_options_layout.addWidget(self.show_mask_checkbox)
-        mask_options_layout.addWidget(self.mask_invert_checkbox)
-        mask_style_layout = QHBoxLayout()
+        
+        # 新的显示模式单选框
+        display_mode_layout = QHBoxLayout()
+        self.hide_radio = QRadioButton("隐藏")
         self.area_radio = QRadioButton("面积")
         self.contour_radio = QRadioButton("轮廓")
-        self.area_radio.setChecked(True)
-        self.mask_style_group = QButtonGroup(self)
-        self.mask_style_group.addButton(self.area_radio)
-        self.mask_style_group.addButton(self.contour_radio)
-        mask_style_layout.addWidget(QLabel("显示方式:"))
-        mask_style_layout.addWidget(self.area_radio)
-        mask_style_layout.addWidget(self.contour_radio)
-        auto_options_layout = QHBoxLayout()
-        self.auto_save_checkbox = QCheckBox("自动保存 (X)")
-        self.high_contrast_checkbox = QCheckBox("高对比度 (C)")
-        auto_options_layout.addWidget(self.auto_save_checkbox)
-        auto_options_layout.addWidget(self.high_contrast_checkbox)
-        display_layout.addLayout(mask_options_layout)
-        display_layout.addLayout(mask_style_layout)
-        display_layout.addLayout(auto_options_layout)
+        self.ants_radio = QRadioButton("蚂蚁线")
+        
+        self.display_mode_group = QButtonGroup(self)
+        self.display_mode_group.addButton(self.hide_radio)
+        self.display_mode_group.addButton(self.area_radio)
+        self.display_mode_group.addButton(self.contour_radio)
+        self.display_mode_group.addButton(self.ants_radio)
 
-        # modify Edit Tools Group
+        display_mode_layout.addWidget(QLabel("查看模式:"))
+        display_mode_layout.addWidget(self.hide_radio)
+        display_mode_layout.addWidget(self.area_radio)
+        display_mode_layout.addWidget(self.contour_radio)
+        display_mode_layout.addWidget(self.ants_radio)
+
+        # 其他选项
+        other_options_layout = QHBoxLayout()
+        self.mask_invert_checkbox = QCheckBox("反相显示")
+        self.high_contrast_checkbox = QCheckBox("高对比度 (C)")
+        other_options_layout.addWidget(self.mask_invert_checkbox)
+        other_options_layout.addWidget(self.high_contrast_checkbox)
+
+        auto_save_layout = QHBoxLayout()
+        self.auto_save_checkbox = QCheckBox("自动保存 (X)")
+        auto_save_layout.addWidget(self.auto_save_checkbox)
+
+        display_layout.addLayout(display_mode_layout)
+        display_layout.addLayout(other_options_layout)
+        display_layout.addLayout(auto_save_layout)
+        # --- END: 重构 Display Options Group ---
+
+        # --- Edit Tools Group (无变动) ---
         tools_group = QGroupBox("编辑工具")
         tools_layout = QVBoxLayout(tools_group)
         tool_buttons_layout = QHBoxLayout()
         self.lasso_button = QPushButton("套索 (Q)")
         self.polygon_button = QPushButton("多边形 (E)")
         self.erase_selection_button = QPushButton("擦除选区")
- 
         self.lasso_button.setCheckable(True)
         self.polygon_button.setCheckable(True)
         self.erase_selection_button.setCheckable(True)
-
         self.tool_button_group = QButtonGroup(self)
         self.tool_button_group.addButton(self.lasso_button)
         self.tool_button_group.addButton(self.polygon_button)
         self.tool_button_group.addButton(self.erase_selection_button)
         self.lasso_button.setChecked(True)
-
         tool_buttons_layout.addWidget(self.lasso_button)
         tool_buttons_layout.addWidget(self.polygon_button)
         tool_buttons_layout.addWidget(self.erase_selection_button)
-
         action_buttons_layout = QVBoxLayout()
         self.clear_button = QPushButton("清除Mask (W)")
         self.save_button = QPushButton("保存 (Ctrl+S)")
@@ -144,35 +148,32 @@ class MainWindow(QMainWindow):
         action_buttons_layout.addWidget(self.clear_button)
         action_buttons_layout.addWidget(self.save_button)
         action_buttons_layout.addWidget(self.save_and_next_button)
-        
         tools_layout.addLayout(tool_buttons_layout)
         tools_layout.addLayout(action_buttons_layout)
 
-        # Nav buttons
+        # --- Nav buttons (无变动) ---
         nav_layout = QHBoxLayout()
         self.prev_button = QPushButton("上一张 (A/←)")
         self.next_button = QPushButton("下一张 (D/→)")
         nav_layout.addWidget(self.prev_button)
         nav_layout.addWidget(self.next_button)
 
-        # Assemble function layout
+        # --- Assemble layout (无变动) ---
         function_layout.addWidget(display_group)
         function_layout.addWidget(tools_group)
         function_layout.addStretch()
         function_layout.addLayout(nav_layout)
-        function_frame.setLayout(function_layout) # 确保function_frame有布局
-        
-        # Assemble splitters and main layout
+        function_frame.setLayout(function_layout)
         self.right_splitter.addWidget(self.preview_panel)
         self.right_splitter.addWidget(function_frame)
-        self.right_splitter.setSizes([600, 200]) # 调整初始比例
+        self.right_splitter.setSizes([600, 200])
         self.main_splitter.addWidget(canvas_area)
         self.main_splitter.addWidget(self.right_splitter)
-        self.main_splitter.setSizes([1200, 600]) # 调整初始比例
+        self.main_splitter.setSizes([1200, 600])
         main_layout.addWidget(self.main_splitter)
     
+    # --- _create_menu (无变动) ---
     def _create_menu(self):
-        # ... (此部分未修改，保持原样)
         self.menu_bar = self.menuBar()
         file_menu = self.menu_bar.addMenu("文件(&F)")
         import_action = QAction("加载/刷新图像 (I)", self)
@@ -194,9 +195,10 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         self.restore_layout_action = QAction("恢复默认布局", self)
         self.restore_layout_action.triggered.connect(self.restore_layout)
-        view_menu.addAction(self.restore_layout_action) 
+        view_menu.addAction(self.restore_layout_action)  
         settings_menu = self.menu_bar.addMenu("设置(&S)")
 
+    # --- START: 更新快捷键 ---
     def _create_actions_and_shortcuts(self):
         def create_shortcut(key_name, function):
             shortcut_str = self.model.get_keybinding(key_name)
@@ -209,27 +211,27 @@ class MainWindow(QMainWindow):
         create_shortcut('next_image', self.model.increment_index)
         create_shortcut('prev_image', self.model.decrement_index)
         create_shortcut('save', self.canvas.save_current_mask)
-        # --- START: 修改快捷键 ---
         create_shortcut('draw_mode', lambda: self.model.set_selection_tool("lasso"))
         create_shortcut('erase_mode', lambda: self.model.set_selection_tool("polygon"))
         create_shortcut('clear_mask', self.canvas.clear_current_selection)
-
         create_shortcut('import_files', self.import_images)
         create_shortcut('save_and_next', self.save_and_next)
-
-        # --- START: 核心修正 - 快捷键直接更新模型，而不是模拟UI点击 ---
-        create_shortcut('toggle_mask', lambda: self.model.set_show_mask(not self.model.show_mask))
+        
+        # 废弃 toggle_mask (Z键) 快捷键，因为现在模式更复杂
+        # create_shortcut('toggle_mask', lambda: self.model.set_show_mask(not self.model.show_mask))
+        
+        # 保持自动保存和高对比度快捷键
         create_shortcut('auto_save', lambda: self.model.set_auto_save(not self.model.auto_save))
         create_shortcut('high_contrast', lambda: self.model.set_high_contrast(not self.model.high_contrast))
-        # --- END: 核心修正 ---
+    # --- END: 更新快捷键 ---
 
+    # --- START: 更新信号连接 ---
     def _connect_signals(self):
         self.import_button.clicked.connect(self.import_images)
         self.prev_button.clicked.connect(self.model.decrement_index)
         self.next_button.clicked.connect(self.model.increment_index)
         self.progress_slider.slider.valueChanged.connect(self.model.set_current_index)
         
-        # --- START: 修改信号连接 ---
         self.clear_button.clicked.connect(self.canvas.clear_current_selection)
         self.save_button.clicked.connect(self.canvas.save_current_mask)
         self.save_and_next_button.clicked.connect(self.save_and_next)
@@ -239,35 +241,35 @@ class MainWindow(QMainWindow):
         self.lasso_button.toggled.connect(lambda checked: self.model.set_selection_tool("lasso") if checked else None)
         self.polygon_button.toggled.connect(lambda checked: self.model.set_selection_tool("polygon") if checked else None)
         self.erase_selection_button.toggled.connect(lambda checked: self.model.set_selection_tool("erase") if checked else None)
-        # --- END: 修改信号连接 ---
         
-        self.show_mask_checkbox.toggled.connect(self.model.set_show_mask)
+        # 连接新的显示模式单选框
+        self.hide_radio.toggled.connect(lambda checked: self.model.set_display_mode("hide") if checked else None)
+        self.area_radio.toggled.connect(lambda checked: self.model.set_display_mode("area") if checked else None)
+        self.contour_radio.toggled.connect(lambda checked: self.model.set_display_mode("contour") if checked else None)
+        self.ants_radio.toggled.connect(lambda checked: self.model.set_display_mode("ants") if checked else None)
+
+        # 连接其他控制选项
         self.auto_save_checkbox.toggled.connect(self.model.set_auto_save)
         self.high_contrast_checkbox.toggled.connect(self.model.set_high_contrast)
         self.mask_invert_checkbox.toggled.connect(self.model.set_mask_invert)
         
-        self.area_radio.toggled.connect(lambda checked: self.model.set_mask_display_style("area") if checked else None)
-        self.contour_radio.toggled.connect(lambda checked: self.model.set_mask_display_style("contour") if checked else None)
-        
+        # 连接模型信号到UI槽函数
         self.model.index_changed.connect(self.on_index_changed)
         self.model.files_changed.connect(self.on_files_changed)
-        
-        # --- START: 修改信号连接 ---
         self.model.tool_changed.connect(self.on_tool_changed)
-        # --- END: 修改信号连接 ---
-        self.model.show_mask_changed.connect(self.show_mask_checkbox.setChecked)
+        
+        # 连接模型状态变化到UI组件
         self.model.auto_save_changed.connect(self.auto_save_checkbox.setChecked)
         self.model.high_contrast_changed.connect(self.high_contrast_checkbox.setChecked)
-        self.model.mask_display_changed.connect(self.on_mask_display_changed)
+        self.model.display_mode_changed.connect(self.on_display_mode_changed) # 新信号
         
-        # --- START: 修改画布连接 ---
+        # 连接模型更新到画布
         self.model.mask_updated.connect(self.canvas.update_selection_display)
         self.model.high_contrast_changed.connect(self.canvas.set_high_contrast)
-        # self.model.mask_display_changed.connect(self.canvas.update_selection_display) # 可能会导致重复刷新
-        self.model.show_mask_changed.connect(self.canvas.set_selection_visibility)
-        # --- END: 修改画布连接 ---
+        self.model.display_mode_changed.connect(self.canvas.update_selection_display) # 模式改变时也需刷新画布
 
         self.model.mask_updated.connect(lambda: self.preview_panel.update_previews(self.model.current_index))
+    # --- END: 更新信号连接 ---
 
     # --- Slots for Model -> UI updates ---
     @pyqtSlot(str)
@@ -280,16 +282,19 @@ class MainWindow(QMainWindow):
         elif tool == 'erase':
             self.erase_selection_button.setChecked(True)
 
-    @pyqtSlot()
-    def on_mask_display_changed(self):
-        """当模型的显示风格或反相状态改变时，更新UI"""
-        style = self.model.mask_display_style
-        if style == "area":
+    # --- START: 新增槽函数 ---
+    @pyqtSlot(str)
+    def on_display_mode_changed(self, mode):
+        """当模型的显示模式改变时，更新UI中的单选框状态"""
+        if mode == "hide":
+            self.hide_radio.setChecked(True)
+        elif mode == "area":
             self.area_radio.setChecked(True)
-        elif style == "contour":
+        elif mode == "contour":
             self.contour_radio.setChecked(True)
-        self.mask_invert_checkbox.setChecked(self.model.mask_invert)
-        # canvas的更新已通过独立信号连接处理
+        elif mode == "ants":
+            self.ants_radio.setChecked(True)
+    # --- END: 新增槽函数 ---
 
     @pyqtSlot(int)
     def on_index_changed(self, index):
@@ -297,7 +302,7 @@ class MainWindow(QMainWindow):
         self.progress_slider.slider.blockSignals(True)
         self.progress_slider.set_value(index)
         self.progress_slider.slider.blockSignals(False)
-        self.progress_slider.update_label() # <-- 新增
+        self.progress_slider.update_label()
         self.canvas.load_image(index)
         self.preview_panel.update_previews(index)
 
@@ -305,6 +310,8 @@ class MainWindow(QMainWindow):
     def on_files_changed(self, total_files):
         if total_files > 0:
             self.progress_slider.set_range(0, total_files - 1)
+            # 初始化时根据模型默认值设置UI
+            self.on_display_mode_changed(self.model.display_mode)
             self.on_index_changed(self.model.current_index)
         else:
             self.progress_slider.set_range(0, -1)
@@ -312,16 +319,13 @@ class MainWindow(QMainWindow):
             self.canvas.load_image(-1)
             QMessageBox.information(self, "提示", "在指定路径下未找到图像文件。")
     
+    # --- Other methods (基本无变动) ---
     def save_and_next(self):
-        """保存当前mask，如果成功，则移动到下一张图像。"""
         if self.model.current_index < 0:
             return
-        
-        # 调用save_current_mask并检查其返回值
         if self.canvas.save_current_mask():
             self.model.increment_index()
 
-    # --- Other methods ---
     def _load_initial_settings(self):
         self.original_path_selector.set_path(self.model.get_path('original_path'))
         self.denoised_path_selector.set_path(self.model.get_path('denoised_path'))
@@ -337,18 +341,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "路径错误", "请先选择“原图路径”和“保存路径”！")
             return
         self.model.update_file_lists(
-            original_path, 
-            self.denoised_path_selector.get_path(), 
+            original_path,  
+            self.denoised_path_selector.get_path(),  
             self.mask_path_selector.get_path()
         )
 
     def restore_layout(self):
         if hasattr(self, 'initial_state'):
-            # 恢复主窗口（DockWidget）
             self.restoreState(self.initial_layout_states['main_window'])
-            # 恢复主分割器
             self.main_splitter.restoreState(self.initial_layout_states['main_splitter'])
-            # 恢复右侧分割器
             self.right_splitter.restoreState(self.initial_layout_states['right_splitter'])
             self.path_dock_widget.setVisible(True)
 

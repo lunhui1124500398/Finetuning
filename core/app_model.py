@@ -2,22 +2,24 @@
 
 import configparser
 from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtGui import QPainterPath # 新增导入
+from PyQt6.QtGui import QPainterPath
 import os
 
 class AppModel(QObject):
     """应用程序的核心数据模型，负责管理所有状态。"""
-    # 定义信号，当状态改变时发射，通知UI更新
     config_loaded = pyqtSignal()
-    files_changed = pyqtSignal(int)  # int: total number of files
-    index_changed = pyqtSignal(int)  # int: current index
-    mask_updated = pyqtSignal()      # 当Mask被修改时
-    tool_changed = pyqtSignal(str)  # str: "lasso","polygon","erase"
-    # mode_changed = pyqtSignal(str)   # str: "draw" or "erase"
-    show_mask_changed = pyqtSignal(bool)
+    files_changed = pyqtSignal(int)
+    index_changed = pyqtSignal(int)
+    mask_updated = pyqtSignal()
+    tool_changed = pyqtSignal(str)
     auto_save_changed = pyqtSignal(bool)
-    mask_display_changed = pyqtSignal()
     high_contrast_changed = pyqtSignal(bool)
+    
+    # --- START: 核心状态重构 ---
+    # 新增信号，用于通知UI显示模式已改变
+    display_mode_changed = pyqtSignal(str) 
+    # 废弃: show_mask_changed, mask_display_changed
+    # --- END: 核心状态重构 ---
 
     def __init__(self, config_path=None):
         super().__init__()
@@ -36,20 +38,22 @@ class AppModel(QObject):
         self._denoised_files = []
         self._mask_files = []
         self._current_index = -1
-
-        # 栈状态初始化
-        self._undo_stack = {} # key: index, value: list of QPixmaps
-        self._redo_stack = {} # 同上
+        self._undo_stack = {}
+        self._redo_stack = {}
         self.max_undo_steps = 128
-                
+        
         # 功能状态
-        self._selection_tool = "lasso" 
-        self._show_mask = True
+        self._selection_tool = "lasso"  
         self._auto_save = False
         self._high_contrast = False
-        self._mask_display_style = "area"
         self._mask_invert = False
 
+        # --- START: 核心状态重构 ---
+        # 使用单一状态 self._display_mode 替换 self._show_mask 和 self._mask_display_style
+        # 可选值: "hide", "area", "contour", "ants"
+        self._display_mode = "contour"  # 默认以绿色轮廓模式启动
+        # --- END: 核心状态重构 ---
+        
         self.load_config()
 
     def load_config(self):
@@ -58,16 +62,13 @@ class AppModel(QObject):
             print(f"警告: 配置文件未找到或为空: {self.config_path}")
         self.config_loaded.emit()
     
-    # --- 栈方法 ---
+    # --- 栈方法 (无变动) ---
     def push_undo_state(self, index, path: QPainterPath):
         if index not in self._undo_stack:
             self._undo_stack[index] = []
         if index in self._redo_stack:
             self._redo_stack[index].clear()
-        
-        # QPainterPath 需要深拷贝
-        self._undo_stack[index].append(QPainterPath(path)) 
-        
+        self._undo_stack[index].append(QPainterPath(path))
         if len(self._undo_stack[index]) > self.max_undo_steps:
             self._undo_stack[index].pop(0)
 
@@ -76,7 +77,7 @@ class AppModel(QObject):
             return self._undo_stack[index].pop()
         return None
     
-    # --- 文件与索引 (省略未修改部分) ---
+    # --- 文件与索引 (无变动) ---
     @property
     def current_index(self):
         return self._current_index
@@ -106,7 +107,7 @@ class AppModel(QObject):
         else:
             self.set_current_index(-1)
             
-    # --- START: 修改状态 ---
+    # --- 状态属性与方法 ---
     @property
     def selection_tool(self):
         return self._selection_tool
@@ -115,23 +116,25 @@ class AppModel(QObject):
         if tool in ["lasso", "polygon", "erase"] and self._selection_tool != tool:
             self._selection_tool = tool
             self.tool_changed.emit(tool)
-            
+    
+    # --- START: 核心状态重构 ---
     @property
-    def show_mask(self):
-        return self._show_mask
+    def display_mode(self):
+        return self._display_mode
 
-    def set_show_mask(self, show: bool):
-        """【修正】明确设置显示状态，而不是翻转"""
-        if self._show_mask != show:
-            self._show_mask = show
-            self.show_mask_changed.emit(self._show_mask)
-
+    def set_display_mode(self, mode: str):
+        """设置新的显示模式"""
+        valid_modes = ["hide", "area", "contour", "ants"]
+        if mode in valid_modes and self._display_mode != mode:
+            self._display_mode = mode
+            self.display_mode_changed.emit(mode)
+    # --- END: 核心状态重构 ---
+            
     @property
     def auto_save(self):
         return self._auto_save
 
     def set_auto_save(self, auto: bool):
-        """【修正】明确设置自动保存状态，而不是翻转"""
         if self._auto_save != auto:
             self._auto_save = auto
             self.auto_save_changed.emit(self._auto_save)
@@ -146,24 +149,14 @@ class AppModel(QObject):
             self.high_contrast_changed.emit(enabled)
 
     @property
-    def mask_display_style(self):
-        return self._mask_display_style
-
-    def set_mask_display_style(self, style):
-        if style in ["area", "contour"] and self._mask_display_style != style:
-            self._mask_display_style = style
-            self.mask_display_changed.emit()
-
-    @property
     def mask_invert(self):
         return self._mask_invert
 
     def set_mask_invert(self, invert: bool):
         if self._mask_invert != invert:
             self._mask_invert = invert
-            self.mask_display_changed.emit()
-
-    # --- END: 核心修正 ---
+            # 任何显示相关的都通过 mask_updated 触发刷新
+            self.mask_updated.emit()
     
     def get_path(self, key):
         return self.config['Paths'].get(key)
