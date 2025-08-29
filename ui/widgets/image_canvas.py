@@ -183,49 +183,63 @@ class ImageCanvas(QGraphicsView):
 
     def update_selection_display(self):
         """统一更新画布上的所有遮罩和选区显示"""
+        # 确保在操作前，底图是干净的原始图像（或高对比度图像）
+        self.update_display_pixmap()
+
         if not self.model.show_mask or not self._original_pixmap:
             self._mask_overlay_item.setPixmap(QPixmap())
             self._selection_item.setPath(QPainterPath())
             return
 
-        # 1. 更新传统的颜色叠加/轮廓 (用于参考)
+        base_pixmap = self._original_item.pixmap()
+        if not base_pixmap or base_pixmap.isNull(): return
+
         style = self.model.mask_display_style
-
-        # 确保原始图像被显示(尊重高对比度设置)
-        self._original_item.setPixmap(self._original_pixmap)
-        self.update_display_pixmap()
-
-        if style == "area":
-            # 1. 获取当前显示的底图 (可能是原图，也可能是高对比度图)
-            base_pixmap = self._original_item.pixmap()
-            if not base_pixmap or base_pixmap.isNull(): 
-                # 如果底图为空，先恢复一下
-                self.update_display_pixmap()
-                base_pixmap = self._original_item.pixmap()
-                if not base_pixmap or base_pixmap.isNull(): return
-            
-            # 2. 从当前选区路径生成用于显示的pixmap
-            mask_pixmap = self._get_display_mask()
-            if not mask_pixmap or mask_pixmap.isNull():
-                 # 如果获取不到mask，就不要继续执行，避免出错
-                 return
-            
-            # 3. 读取配置
-            area_color_str = self.model.config['Colors'].get('mask_overlay_color', '255,0,0,100')
-            area_color_rgba = tuple(map(int, area_color_str.split(',')))
-            # 4. 【核心修改】调用ImageManager生成一个包含底图和遮罩的“最终合成图”
-            composite_pixmap = self.image_manager.create_overlay_pixmap(
-                base_pixmap,  # 使用实际的底图，而不是空白图
-                mask_pixmap,
-                'area',
-                area_color_rgba,
-                invert=self.model.mask_invert
-            )
-            # 5. 【核心修改】将合成图直接设置给底图图元，并清空上层遮罩
-            self._original_item.setPixmap(composite_pixmap)
-            self._mask_overlay_item.setPixmap(QPixmap()) # 清空上层，避免重复显示
-            self._selection_item.setPath(QPainterPath()) # 面积模式不显示蚂蚁线
         
+        # 为两种模式统一获取用于生成遮罩的二值图
+        # area 模式下，可能使用已保存的mask；contour 模式下，总使用当前编辑的路径
+        mask_pixmap = self._get_display_mask() if style == "area" else self.get_pixmap_from_path()
+        if not mask_pixmap or mask_pixmap.isNull():
+            # 如果没有mask，contour模式不显示绿色轮廓，area模式不显示区域
+            if style == 'contour':
+                self._selection_item.setPath(self._selection_path) # 仅显示蚂蚁线
+            else:
+                self._selection_item.setPath(QPainterPath()) # 面积模式隐藏蚂蚁线
+            return
+
+        # 读取配置
+        if style == "area":
+            color_str = self.model.config['Colors'].get('mask_overlay_color', '255,0,0,80')
+            color_rgba = tuple(map(int, color_str.split(',')))
+            thickness = 1 # 面积模式厚度无用
+        else: # contour 模式
+            color_str = self.model.config['Colors'].get('contour_line_color', '0,255,0,128')
+            color_rgba = tuple(map(int, color_str.split(',')))
+            thickness = self.model.config['Colors'].getint('contour_thickness', 1)
+
+        # 【核心修改】调用ImageManager生成一个包含底图和遮罩的“最终合成图”
+        composite_pixmap = self.image_manager.create_overlay_pixmap(
+            base_pixmap,
+            mask_pixmap,
+            style,
+            color_rgba,
+            contour_thickness=thickness,
+            invert=self.model.mask_invert
+        )
+
+        # 将合成图直接设置给底图图元
+        self._original_item.setPixmap(composite_pixmap)
+        # 清空上层遮罩图元，因为它已经被合并到底图中了
+        self._mask_overlay_item.setPixmap(QPixmap())
+
+        # 根据模式决定是否显示蚂蚁线
+        if style == "area":
+            self._selection_item.setPath(QPainterPath())  # 面积模式不显示蚂蚁线
+        else: # contour 模式
+            # 蚂蚁线路径依然需要设置，由 drawForeground 方法负责绘制
+            self._selection_item.setPath(self._selection_path)
+        
+
         ## 调试代码
         # if style == "area":
         #     from Finetuning.utils.debugger import debugger # 确保导入
@@ -257,17 +271,6 @@ class ImageCanvas(QGraphicsView):
         #     self._original_item.setPixmap(composite_pixmap)
         #     self._mask_overlay_item.setPixmap(QPixmap()) 
         #     self._selection_item.setPath(QPainterPath())
-
-        else: # contour 模式
-            # 1. 恢复底图，清除可能存在的面积模式合成图
-            self.update_display_pixmap()
-
-            # 2. 清空用于显示旧绿色轮廓的图元，我们不再需要它了
-            self._mask_overlay_item.setPixmap(QPixmap())
-            
-            # 3. 将我们唯一的、像素精确的路径设置给蚂蚁线图元
-            #    实际的绘制工作会在 drawForeground 中完成
-            self._selection_item.setPath(self._selection_path)
 
     def get_pixmap_from_path(self) -> QPixmap:
         """从当前 _selection_path 生成一个二值化的 QPixmap"""
@@ -512,6 +515,7 @@ class ImageCanvas(QGraphicsView):
     # 文件: /ui/widgets/image_canvas.py
 # 替换 ImageCanvas 类的 drawForeground 方法中绘制 _selection_path 的部分
 
+    # 保留以待修改
     def drawForeground(self, painter, rect):
         """
         【替换】使用新的、像素精确且视觉效果更佳的蚂蚁线绘制逻辑。
@@ -550,7 +554,7 @@ class ImageCanvas(QGraphicsView):
             
             # --- 绘制黑色部分 ---
             pen_black = QPen(Qt.GlobalColor.black, pen_width, Qt.PenStyle.CustomDashLine)
-            # 设置虚线模式：[4像素实线, 4像素空白]
+            # 设置虚线模式：[5像素实线, 5像素空白]
             pen_black.setDashPattern([dash_length, dash_length])
             pen_black.setDashOffset(offset)
             
@@ -566,6 +570,8 @@ class ImageCanvas(QGraphicsView):
             
             painter.setPen(pen_white)
             painter.drawPath(self._selection_path)
+
+    
             
     def update_cursor(self):
         if self._is_panning:

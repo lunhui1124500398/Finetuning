@@ -163,6 +163,7 @@ class ImageManager:
 
         output_pixmap = original_pixmap.copy()
         painter = QPainter(output_pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # 步骤1: 获取用于操作的二值化图像 (QImage)
         mask_image = mask_pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
@@ -181,39 +182,39 @@ class ImageManager:
 
             painter.drawPixmap(0, 0, color_layer)
 
-        # elif style == 'contour':
-        #     # 1. 将 QImage 转换为 OpenCV 格式 (numpy array)
-        #     ptr = mask_image.bits()
-        #     ptr.setsize(mask_image.sizeInBytes())
-        #     # arr 是单通道灰度图
-        #     arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+        elif style == 'contour':
+            # 1. 将 QImage 转换为 OpenCV 格式 (numpy array)
+            ptr = mask_image.bits()
+            ptr.setsize(mask_image.sizeInBytes())
+            # arr 是单通道灰度图
+            arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
 
-        #     # 2. 查找轮廓
-        #     contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            # 2. 查找轮廓
+            contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
 
-        #     debugger.log(f"In ImageManager: Found {len(contours)} contours.")
-        #     if contours:
-        #         # 3. 创建一个与原图等大的4通道透明画布 (BGRA格式)
-        #         #    注意：高度和宽度从 arr.shape 获取
-        #         h, w = arr.shape
-        #         contour_overlay_np = np.zeros((h, w, 4), dtype=np.uint8)
+            debugger.log(f"In ImageManager: Found {len(contours)} contours.")
+            if contours:
+                # 3. 创建一个与原图等大的4通道透明画布 (BGRA格式)
+                #    注意：高度和宽度从 arr.shape 获取
+                h, w = arr.shape
+                contour_overlay_np = np.zeros((h, w, 4), dtype=np.uint8)
 
-        #         # 4. 在透明画布上使用 cv2.drawContours 绘制轮廓
-        #         #    OpenCV 颜色是 BGR(A) 顺序，而 color_rgba 是 RGB(A)
-        #         pen_color_bgr = (color_rgba[2], color_rgba[1], color_rgba[0], color_rgba[3])
+                # 4. 在透明画布上使用 cv2.drawContours 绘制轮廓
+                #    OpenCV 颜色是 BGR(A) 顺序，而 color_rgba 是 RGB(A)
+                pen_color_bgr = (color_rgba[2], color_rgba[1], color_rgba[0], color_rgba[3])
                 
-        #         # 【关键】使用 cv2.drawContours，它能保证轮廓闭合
-        #         cv2.drawContours(contour_overlay_np, contours, -1, pen_color_bgr, contour_thickness)
-        #         debugger.save_image(contour_overlay_np, "2_opencv_drawn_overlay")
+                # 【关键】使用 cv2.drawContours，它能保证轮廓闭合
+                cv2.drawContours(contour_overlay_np, contours, -1, pen_color_bgr, contour_thickness)
+                debugger.save_image(contour_overlay_np, "2_opencv_drawn_overlay")
 
                 # 5. 将绘制好的 numpy 数组转换回 QPixmap
                 #    注意：QImage 需要 BGRA -> ARGB 的转换，但 Format_ARGB32 能正确处理
-                # bytes_per_line = 4 * w
-                # q_image = QImage(contour_overlay_np.data, w, h, bytes_per_line, QImage.Format.Format_ARGB32)
-                # contour_pixmap = QPixmap.fromImage(q_image)
+                bytes_per_line = 4 * w
+                q_image = QImage(contour_overlay_np.data, w, h, bytes_per_line, QImage.Format.Format_ARGB32)
+                contour_pixmap = QPixmap.fromImage(q_image)
 
-                # # 6. 将这个包含轮廓的 pixmap 叠加到主画布上
-                # painter.drawPixmap(0, 0, contour_pixmap)
+                # 6. 将这个包含轮廓的 pixmap 叠加到主画布上
+                painter.drawPixmap(0, 0, contour_pixmap)
 
         painter.end()
         return output_pixmap
