@@ -1,8 +1,11 @@
 # Finetuning/ui/widgets/image_canvas.py
 
 from PyQt6.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QMessageBox, QGraphicsPathItem
-from PyQt6.QtCore import Qt, pyqtSlot, QPointF, pyqtSignal, QTimer
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QCursor, QPainterPath, QPolygonF, QImage
+from PyQt6.QtCore import Qt, pyqtSlot, QPointF, pyqtSignal, QTimer, QRectF, QDateTime
+from PyQt6.QtGui import (
+    QPixmap, QPainter, QPen, QColor, QCursor, QPainterPath, 
+    QPolygonF, QImage, QPainterPathStroker
+)
 import os
 from Finetuning.utils.debugger import debugger   # 导入调试器
 
@@ -47,6 +50,8 @@ class ImageCanvas(QGraphicsView):
         self._original_item = QGraphicsPixmapItem()
         self._selection_item = QGraphicsPathItem() # 用于显示蚂蚁线
         self._mask_overlay_item = QGraphicsPixmapItem() # 用于显示旧的颜色叠加
+        self._selection_item.setPen(QPen(Qt.PenStyle.NoPen)) # 不使用边框
+        
         self.scene.addItem(self._original_item)
         self.scene.addItem(self._mask_overlay_item)
         self.scene.addItem(self._selection_item)
@@ -66,9 +71,12 @@ class ImageCanvas(QGraphicsView):
         
         # 蚂蚁线动画
         self.ant_offset = 0
-        self.ant_timer = QTimer(self)
-        self.ant_timer.timeout.connect(self.animate_ants)
-        self.ant_timer.start(100)
+        # self.ant_timer = QTimer(self)
+        # self.ant_timer.timeout.connect(self.animate_ants)
+        # self.ant_timer.start(100)
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self._animate_ants)
+        self.animation_timer.start(50) # 每50毫秒触发一次动画更新
         
         # 自定义光标
         self.cursors = {
@@ -115,6 +123,10 @@ class ImageCanvas(QGraphicsView):
         self._is_drawing_selection = False
         self._temp_drawing_points = []
 
+        self._selection_path = QPainterPath()
+        self._current_mask_pixmap = None
+
+        # 加载原图
         original_path = self.model._original_files[index]
         self._original_pixmap = self.image_manager.load_pixmap(original_path)
         if not self._original_pixmap:
@@ -126,10 +138,17 @@ class ImageCanvas(QGraphicsView):
         # 加载参考Mask (用于显示)
         self._current_mask_pixmap = None
         if self.model._mask_files and index < len(self.model._mask_files):
-            self._current_mask_pixmap = self.image_manager.load_pixmap(self.model._mask_files[index])
+            # 临时加载到 _current_mask_pixmap
+            mask_pixmap = self.image_manager.load_pixmap(self.model._mask_files[index])
+            if mask_pixmap and not mask_pixmap.isNull():
+                 self._current_mask_pixmap = mask_pixmap
+                 # 【修改点 2】立刻将其转换为像素级精确的路径
+                 self._selection_path = self.image_manager.create_path_from_mask(self._current_mask_pixmap)
+        
+        # 如果没有参考mask，确保创建一个空的黑色pixmap
         if self._current_mask_pixmap is None or self._current_mask_pixmap.size() != self._original_pixmap.size():
-             self._current_mask_pixmap = QPixmap(self._original_pixmap.size())
-             self._current_mask_pixmap.fill(Qt.GlobalColor.black)
+            self._current_mask_pixmap = QPixmap(self._original_pixmap.size())
+            self._current_mask_pixmap.fill(Qt.GlobalColor.black)
         
         if self._current_mask_pixmap:
             debugger.save_image(self._current_mask_pixmap, f"1_input_mask_index_{index}")
@@ -138,7 +157,6 @@ class ImageCanvas(QGraphicsView):
         
         self.setSceneRect(self._original_item.boundingRect())
         self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
         self.scene.update()  # 确保场景立即更新
 
     def _prepare_for_drawing(self):
@@ -151,8 +169,9 @@ class ImageCanvas(QGraphicsView):
         # 2. 轮廓模式 -> 选区路径
         if self.model.mask_display_style == 'contour' and self._selection_path.isEmpty():
             if self._current_mask_pixmap:
-                 self._selection_path = self.image_manager.convert_mask_to_path(self._current_mask_pixmap)
-
+                 # self._selection_path = self.image_manager.convert_mask_to_path(self._current_mask_pixmap)
+                self._selection_path = self.image_manager.create_path_from_mask(self._current_mask_pixmap)
+        
         # 3. Mask不显示 -> 自动显示
         if not self.model.show_mask:
             self.model.set_show_mask(True)
@@ -240,43 +259,15 @@ class ImageCanvas(QGraphicsView):
         #     self._selection_item.setPath(QPainterPath())
 
         else: # contour 模式
-            # 【重要】确保从面积模式切换回轮廓模式时，底图能恢复为原始/高对比度图
-            self.update_display_pixmap() # 恢复底图
+            # 1. 恢复底图，清除可能存在的面积模式合成图
+            self.update_display_pixmap()
 
-            self._mask_overlay_item.setPixmap(QPixmap()) # 轮廓模式用蚂蚁线代替
-            # 2. 更新蚂蚁线选区
-            pen_white = QPen(Qt.GlobalColor.white, 1, Qt.PenStyle.CustomDashLine)
-            pen_white.setDashPattern([5, 5])
-            pen_white.setDashOffset(self.ant_offset)
-            # 蚂蚁线效果需要双层画笔
-            # QGraphicsPathItem 只支持一个pen, 我们在paint里自己画
+            # 2. 清空用于显示旧绿色轮廓的图元，我们不再需要它了
+            self._mask_overlay_item.setPixmap(QPixmap())
+            
+            # 3. 将我们唯一的、像素精确的路径设置给蚂蚁线图元
+            #    实际的绘制工作会在 drawForeground 中完成
             self._selection_item.setPath(self._selection_path)
-
-            # [调试用]
-            self._mask_overlay_item.setPixmap(QPixmap()) # 清空旧的叠加
-            # 从配置文件读取颜色和粗细
-            contour_color_str = self.model.config['Colors'].get('contour_line_color', '0,255,0,255')
-            contour_color_rgba = tuple(map(int, contour_color_str.split(',')))
-            contour_thickness = self.model.config['Colors'].getint('contour_thickness', 1)
-            # 调用 image_manager 来创建包含轮廓的 Pixmap
-            # 注意：这里 original_pixmap 我们传一个空的，因为我们只想得到轮廓层
-            # self._current_mask_pixmap 是我们想要处理的二值图
-            # 创建一个保证透明的背景板
-            transparent_bg = QPixmap(self._original_pixmap.size())
-            transparent_bg.fill(Qt.GlobalColor.transparent)
-
-            overlay_pixmap = self.image_manager.create_overlay_pixmap(
-                transparent_bg,  # 一个透明的背景
-                self._current_mask_pixmap,              # 包含形状的二值图
-                'contour',
-                contour_color_rgba,
-                contour_thickness
-            )
-            if overlay_pixmap and not overlay_pixmap.isNull():
-                 debugger.save_image(overlay_pixmap, "3_final_pixmap_before_display")
-             # 将这个最终的 Pixmap 设置到图元上
-            self._mask_overlay_item.setPixmap(overlay_pixmap)
-            self._selection_item.setPath(QPainterPath())
 
     def get_pixmap_from_path(self) -> QPixmap:
         """从当前 _selection_path 生成一个二值化的 QPixmap"""
@@ -329,10 +320,16 @@ class ImageCanvas(QGraphicsView):
         
         return None
         
-    def animate_ants(self):
-        self.ant_offset = (self.ant_offset + 1) % 10
-        if self.model.mask_display_style == 'contour':
-            # 触发 QGraphicsPathItem 的重绘
+    # def animate_ants(self):
+    #     self.ant_offset = (self.ant_offset + 1) % 10
+    #     if self.model.mask_display_style == 'contour':
+    #         # 触发 QGraphicsPathItem 的重绘
+    #         self.scene.update(self._selection_item.boundingRect())
+
+    def _animate_ants(self):
+        """用于触发蚂蚁线动画的刷新"""
+        if self.model.show_mask and self.model.mask_display_style == 'contour':
+            # 更新整个选区所在的区域以重绘蚂蚁线
             self.scene.update(self._selection_item.boundingRect())
 
     # --- 事件处理 (大量借鉴Demo) ---
@@ -426,36 +423,6 @@ class ImageCanvas(QGraphicsView):
             return 'subtract'
         return 'new'
 
-    # def _end_drawing(self, commit_selection=True):
-    #     if not self._is_drawing_selection: return
-
-    #     if commit_selection and len(self._temp_drawing_points) >= 3:
-    #         poly = QPolygonF(self._temp_drawing_points)
-    #         path = QPainterPath()
-    #         path.addPolygon(poly)
-    #         path.closeSubpath()
-            
-    #         modifier = self._get_current_modifier()
-    #         if modifier == 'new':
-    #             self._selection_path = path
-    #         elif modifier == 'add':
-    #             self._selection_path = self._selection_path.united(path)
-    #         elif modifier == 'subtract':
-    #             self._selection_path = self._selection_path.subtracted(path)
-            
-    #         # 在完成绘制和布尔运算后，调用新方法将路径对齐到像素网格
-    #         if self._original_pixmap and not self._original_pixmap.isNull():
-                
-    #             self._selection_path = self.image_manager.snap_path_to_pixels(
-    #                 self._selection_path, self._original_pixmap.size()
-    #             )
-
-    #         self.model.mask_updated.emit()
-
-    #     self._is_drawing_selection = False
-    #     self._temp_drawing_points = []
-    #     self.scene.update()
-
     def _end_drawing(self, commit_selection=True):
         if not self._is_drawing_selection:
             return
@@ -494,7 +461,7 @@ class ImageCanvas(QGraphicsView):
                     if not is_valid:
                         # 如果验证失败 (包括减去后完全为空的情况)，弹出提示，并且不更新选区。
                         # 注意：如果路径在相减后变为空，is_valid 也将为 False，这是符合预期的行为。
-                        QMessageBox.warning(self, "提示", "选区未覆盖任何像素面积的50%以上，操作无效。")
+                        QMessageBox.warning(self, "提示", "选区未覆盖任何像素面积的50%以上，选区线将不可见。")
                         # 不更新 self._selection_path，相当于撤销了本次绘制
                     else:
                         # 验证成功, 更新最终选区路径
@@ -508,13 +475,58 @@ class ImageCanvas(QGraphicsView):
         self.scene.update()
 
     # --- 覆盖 paintEvent 来绘制临时的线和蚂蚁线 ---
+    # def drawForeground(self, painter, rect):
+    #     super().drawForeground(painter, rect)
+    #     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    #     # 绘制正在进行中的选区线 (如多边形的橡皮筋)
+    #     if self._is_drawing_selection and self._temp_drawing_points:
+    #         pen = QPen(Qt.GlobalColor.cyan, 1 / self.transform().m11(), Qt.PenStyle.DotLine)
+    #         painter.setPen(pen)
+            
+    #         points_f = self._temp_drawing_points
+    #         if len(points_f) > 1:
+    #             painter.drawPolyline(QPolygonF(points_f))
+            
+    #         if self._current_tool == 'polygon' and self.underMouse():
+    #              mouse_pos = self.mapToScene(self.mapFromGlobal(QCursor.pos()))
+    #              painter.drawLine(points_f[-1], mouse_pos)
+        
+    #     # 绘制蚂蚁线 (重写此部分以获得双色效果)
+    #     if self.model.show_mask and self.model.mask_display_style == 'contour' and not self._selection_path.isEmpty():
+    #         painter.setBrush(Qt.BrushStyle.NoBrush)
+            
+    #         pen_black = QPen(Qt.GlobalColor.black, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
+    #         pen_black.setDashPattern([5, 5])
+    #         pen_black.setDashOffset(self.ant_offset + 5)
+            
+    #         pen_white = QPen(Qt.GlobalColor.white, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
+    #         pen_white.setDashPattern([5, 5])
+    #         pen_white.setDashOffset(self.ant_offset)
+
+    #         painter.setPen(pen_black)
+    #         painter.drawPath(self._selection_path)
+    #         painter.setPen(pen_white)
+    #         painter.drawPath(self._selection_path)
+
+    # 文件: /ui/widgets/image_canvas.py
+# 替换 ImageCanvas 类的 drawForeground 方法中绘制 _selection_path 的部分
+
     def drawForeground(self, painter, rect):
+        """
+        【替换】使用新的、像素精确且视觉效果更佳的蚂蚁线绘制逻辑。
+        """
         super().drawForeground(painter, rect)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        # 获取当前视图的缩放比例
+        current_scale = self.transform().m11()
+        # 保证蚂蚁线在屏幕上始终为1像素宽
+        pen_width = 1.0 / current_scale
+
         # 绘制正在进行中的选区线 (如多边形的橡皮筋)
         if self._is_drawing_selection and self._temp_drawing_points:
-            pen = QPen(Qt.GlobalColor.cyan, 1 / self.transform().m11(), Qt.PenStyle.DotLine)
+            pen = QPen(Qt.GlobalColor.cyan, pen_width, Qt.PenStyle.DotLine)
             painter.setPen(pen)
             
             points_f = self._temp_drawing_points
@@ -522,23 +534,36 @@ class ImageCanvas(QGraphicsView):
                 painter.drawPolyline(QPolygonF(points_f))
             
             if self._current_tool == 'polygon' and self.underMouse():
-                 mouse_pos = self.mapToScene(self.mapFromGlobal(QCursor.pos()))
-                 painter.drawLine(points_f[-1], mouse_pos)
+                mouse_pos = self.mapToScene(self.mapFromGlobal(QCursor.pos()))
+                painter.drawLine(points_f[-1], mouse_pos)
         
-        # 绘制蚂蚁线 (重写此部分以获得双色效果)
+        # 绘制蚂蚁线 (重写此部分以解决“太粗”的问题)
         if self.model.show_mask and self.model.mask_display_style == 'contour' and not self._selection_path.isEmpty():
             painter.setBrush(Qt.BrushStyle.NoBrush)
             
-            pen_black = QPen(Qt.GlobalColor.black, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
-            pen_black.setDashPattern([5, 5])
-            pen_black.setDashOffset(self.ant_offset + 5)
+            # 蚂蚁线总周期长度（例如10个屏幕像素）
+            dash_length = 5.0
+            dash_period = dash_length * 2.0
             
-            pen_white = QPen(Qt.GlobalColor.white, 1 / self.transform().m11(), Qt.PenStyle.CustomDashLine)
-            pen_white.setDashPattern([5, 5])
-            pen_white.setDashOffset(self.ant_offset)
+            # 根据实时时间计算偏移量，实现平滑动画
+            offset = (QDateTime.currentMSecsSinceEpoch() / 150.0) % dash_period
+            
+            # --- 绘制黑色部分 ---
+            pen_black = QPen(Qt.GlobalColor.black, pen_width, Qt.PenStyle.CustomDashLine)
+            # 设置虚线模式：[4像素实线, 4像素空白]
+            pen_black.setDashPattern([dash_length, dash_length])
+            pen_black.setDashOffset(offset)
+            
+            # --- 绘制白色部分 ---
+            pen_white = QPen(Qt.GlobalColor.white, pen_width, Qt.PenStyle.CustomDashLine)
+            pen_white.setDashPattern([dash_length, dash_length])
+            # 白色部分的偏移与黑色部分错开半个周期，填补其空白
+            pen_white.setDashOffset(offset - dash_length)
 
+            # 先画黑色，再画白色，叠加形成蚂蚁线效果
             painter.setPen(pen_black)
             painter.drawPath(self._selection_path)
+            
             painter.setPen(pen_white)
             painter.drawPath(self._selection_path)
             
