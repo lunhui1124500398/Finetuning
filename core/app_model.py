@@ -21,6 +21,9 @@ class AppModel(QObject):
     # 废弃: show_mask_changed, mask_display_changed
     # --- END: 核心状态重构 ---
 
+    # 底图信号
+    image_source_changed = pyqtSignal()
+
     def __init__(self, config_path=None):
         super().__init__()
         
@@ -51,8 +54,10 @@ class AppModel(QObject):
         # --- START: 核心状态重构 ---
         # 使用单一状态 self._display_mode 替换 self._show_mask 和 self._mask_display_style
         # 可选值: "hide", "area", "contour", "ants"
-        self._display_mode = "contour"  # 默认以绿色轮廓模式启动
+        self._display_mode = "ants"  # 默认以蚂蚁线模式启动
         # --- END: 核心状态重构 ---
+
+        self._show_denoised = False # false显示原图
         
         self.load_config()
 
@@ -158,6 +163,19 @@ class AppModel(QObject):
             # 任何显示相关的都通过 mask_updated 触发刷新
             self.mask_updated.emit()
     
+    @property
+    def show_denoised(self):
+        """返回是否应显示去噪图"""
+        return self._show_denoised
+
+    def toggle_image_source(self):
+        """切换底图显示（原图/去噪图）"""
+        # 仅当存在去噪图文件时才执行切换
+        if self._denoised_files:
+            self._show_denoised = not self._show_denoised
+            print(f"切换底图，当前显示去噪图: {self._show_denoised}")
+            self.image_source_changed.emit()
+
     def get_path(self, key):
         return self.config['Paths'].get(key)
         

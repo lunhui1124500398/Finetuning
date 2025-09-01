@@ -39,7 +39,7 @@ class MainWindow(QMainWindow):
         self.initial_state = self.saveState()  
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V4.1(查看/绘制分离版)")
+        self.setWindowTitle("手动抠图工具 V6.2(查看/绘制分离版)")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()
@@ -225,6 +225,7 @@ class MainWindow(QMainWindow):
         create_shortcut('auto_save', lambda: self.model.set_auto_save(not self.model.auto_save))
         create_shortcut('high_contrast', lambda: self.model.set_high_contrast(not self.model.high_contrast))
     # --- END: 更新快捷键 ---
+        create_shortcut('toggle_image_source', self.model.toggle_image_source)
 
     # --- START: 更新信号连接 ---
     def _connect_signals(self):
@@ -268,6 +269,8 @@ class MainWindow(QMainWindow):
         self.model.mask_updated.connect(self.canvas.update_selection_display)
         self.model.high_contrast_changed.connect(self.canvas.set_high_contrast)
         self.model.display_mode_changed.connect(self.canvas.update_selection_display) # 模式改变时也需刷新画布
+
+        self.model.image_source_changed.connect(self.canvas.on_image_source_changed)
 
         self.model.mask_updated.connect(lambda: self.preview_panel.update_previews(self.model.current_index))
     # --- END: 更新信号连接 ---

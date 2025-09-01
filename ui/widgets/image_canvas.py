@@ -55,6 +55,7 @@ class ImageCanvas(QGraphicsView):
 
         self._original_pixmap = None
         self._contrast_pixmap = None
+        self._denoised_pixmap = None
 
         self._selection_path = QPainterPath()
         self._temp_drawing_points = []
@@ -105,6 +106,13 @@ class ImageCanvas(QGraphicsView):
 
         original_path = self.model._original_files[index]
         self._original_pixmap = self.image_manager.load_pixmap(original_path)
+        
+        # 加载去噪图
+        self._denoised_pixmap = None # 每次加载新图时重置
+        if self.model._denoised_files and index < len(self.model._denoised_files):
+            denoised_path = self.model._denoised_files[index]
+            self._denoised_pixmap = self.image_manager.load_pixmap(denoised_path)
+        
         if not self._original_pixmap: return
         
         self.update_display_pixmap()
@@ -443,16 +451,31 @@ class ImageCanvas(QGraphicsView):
 
     @pyqtSlot(bool)
     def set_high_contrast(self, enabled):
-        self.update_display_pixmap()
+        self._contrast_pixmap = None  # 切换高对比度时，使缓存失效
         self.update_selection_display()
 
     def update_display_pixmap(self):
+        """根据模型状态（原图/去噪/高对比度）更新显示的底图。"""
+        # 1. 根据 self.model.show_denoised 决定基础图像
+        active_base_pixmap = self._original_pixmap
+        if self.model.show_denoised and self._denoised_pixmap:
+            active_base_pixmap = self._denoised_pixmap
+
+        # 2. 如果需要高对比度，则在基础图像上应用效果
         if self.model.high_contrast:
+            # 如果缓存无效，则重新计算并缓存
             if not self._contrast_pixmap:
-                self._contrast_pixmap = self.image_manager.apply_clahe(self._original_pixmap)
+                self._contrast_pixmap = self.image_manager.apply_clahe(active_base_pixmap)
             self._original_item.setPixmap(self._contrast_pixmap)
         else:
-            self._original_item.setPixmap(self._original_pixmap)
+            # 否则直接显示基础图像
+            self._original_item.setPixmap(active_base_pixmap)
+
+    @pyqtSlot()
+    def on_image_source_changed(self):
+        """响应模型发出的底图切换信号"""
+        self._contrast_pixmap = None  # 底图已变，高对比度缓存必须失效
+        self.update_selection_display() # 重新绘制所有内容
 
     @pyqtSlot(str)
     def set_tool(self, tool):
