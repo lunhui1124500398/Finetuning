@@ -16,6 +16,7 @@ from .widgets.path_selector import PathSelector
 from .widgets.image_canvas import ImageCanvas
 from .widgets.preview_panel import PreviewPanel
 from .widgets.progress_slider import ProgressSlider
+from .widgets.settings_dialog import SettingsDialog
 
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -23,6 +24,8 @@ class MainWindow(QMainWindow):
         
         self.model = AppModel()
         self.image_manager = ImageManager()
+
+        self.active_actions = []
 
         self.init_ui()
         self._create_menu()
@@ -39,7 +42,7 @@ class MainWindow(QMainWindow):
         self.initial_state = self.saveState()  
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V6.2(查看/绘制分离版)")
+        self.setWindowTitle("手动抠图工具 V7.0(全新自定义))")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()
@@ -197,35 +200,50 @@ class MainWindow(QMainWindow):
         self.restore_layout_action.triggered.connect(self.restore_layout)
         view_menu.addAction(self.restore_layout_action)  
         settings_menu = self.menu_bar.addMenu("设置(&S)")
+        self.settings_action = QAction("打开设置...", self)
+        self.settings_action.triggered.connect(self.open_settings_dialog)
+        settings_menu.addAction(self.settings_action)
 
     # --- START: 更新快捷键 ---
     def _create_actions_and_shortcuts(self):
+       # 移除旧的actions
+        for action in self.active_actions:
+            self.removeAction(action)
+        self.active_actions.clear()
+
         def create_shortcut(key_name, function):
             shortcut_str = self.model.get_keybinding(key_name)
+            if not shortcut_str: return
+
             action = QAction(self)
+            # 支持用分号或逗号分隔的多个快捷键
             shortcuts = [QKeySequence(key.strip()) for key in shortcut_str.replace(';', ',').split(',')]
             action.setShortcuts(shortcuts)
             action.triggered.connect(function)
             self.addAction(action)
+            self.active_actions.append(action) # 跟踪新创建的action
         
-        create_shortcut('next_image', self.model.increment_index)
-        create_shortcut('prev_image', self.model.decrement_index)
-        create_shortcut('save', self.canvas.save_current_mask)
-        create_shortcut('lasso_mode', lambda: self.model.set_selection_tool("lasso"))
-        create_shortcut('polygon_mode', lambda: self.model.set_selection_tool("polygon"))
-        create_shortcut('erase_mode', lambda: self.model.set_selection_tool("erase"))
-        create_shortcut('clear_mask', self.canvas.clear_current_selection)
-        create_shortcut('import_files', self.import_images)
-        create_shortcut('save_and_next', self.save_and_next)
+        # 映射表，简化代码
+        key_map = {
+            'next_image': self.model.increment_index,
+            'prev_image': self.model.decrement_index,
+            'save': self.canvas.save_current_mask,
+            'draw_mode': lambda: self.model.set_selection_tool("lasso"),
+            'polygon_mode': lambda: self.model.set_selection_tool("polygon"),
+            'erase_mode': lambda: self.model.set_selection_tool("erase"),
+            'clear_mask': self.canvas.clear_current_selection,
+            'import_files': self.import_images,
+            'save_and_next': self.save_and_next, # 修正函数名
+            'auto_save': lambda: self.model.set_auto_save(not self.model.auto_save),
+            'high_contrast': lambda: self.model.set_high_contrast(not self.model.high_contrast),
+            'toggle_image_source': self.model.toggle_image_source
+        }
         
-        # 废弃 toggle_mask (Z键) 快捷键，因为现在模式更复杂
-        # create_shortcut('toggle_mask', lambda: self.model.set_show_mask(not self.model.show_mask))
+        # 'polygon_mode' 似乎在原始的ini里没有，可以按需添加
+        # 'toggle_mask' (Z) 已被新的显示模式替代
         
-        # 保持自动保存和高对比度快捷键
-        create_shortcut('auto_save', lambda: self.model.set_auto_save(not self.model.auto_save))
-        create_shortcut('high_contrast', lambda: self.model.set_high_contrast(not self.model.high_contrast))
-    # --- END: 更新快捷键 ---
-        create_shortcut('toggle_image_source', self.model.toggle_image_source)
+        for key, func in key_map.items():
+            create_shortcut(key, func)
 
     # --- START: 更新信号连接 ---
     def _connect_signals(self):
@@ -329,8 +347,60 @@ class MainWindow(QMainWindow):
             return
         if self.canvas.save_current_mask():
             self.model.increment_index()
+  
+    def apply_stylesheet(self):
+        """根据配置文件动态生成并应用QSS样式表。"""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        template_path = os.path.join(script_dir, 'resources', 'style.qss.template')
+        
+        try:
+            with open(template_path, 'r', encoding='utf-8') as f:
+                template_content = f.read()
+            
+            # 替换占位符
+            if self.model.config.has_section('QSS_Colors'):
+                # --- FIX: 按键长度降序排序，避免替换出错 ---
+                color_items = self.model.config.items('QSS_Colors')
+                sorted_color_items = sorted(color_items, key=lambda item: len(item[0]), reverse=True)
+                for key, value in sorted_color_items:
+                    template_content = template_content.replace(f"@{key}", value)
+            
+            QApplication.instance().setStyleSheet(template_content)
+            print("Stylesheet applied successfully.")
+
+        except FileNotFoundError:
+            print(f"Stylesheet template not found at '{template_path}', using default style.")
+        except Exception as e:
+            print(f"Error applying stylesheet: {e}")
+
+    def open_settings_dialog(self):
+        """打开设置对话框，并在保存后应用更改。"""
+        dialog = SettingsDialog(self.model.config, self)
+        if dialog.exec():  # 如果用户点击了 "应用并保存"
+            # 1. 保存配置到文件
+            try:
+                with open(self.model.config_path, 'w', encoding='utf-8') as configfile:
+                    self.model.config.write(configfile)
+                print("Settings saved successfully.")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"保存设置失败: {e}")
+                return
+
+            # 2. 重新加载配置到模型
+            self.model.load_config()
+
+            # 3. 重新应用样式和快捷键
+            self.apply_stylesheet()
+            self._create_actions_and_shortcuts()
+            
+            # 4. (可选) 提示用户某些更改可能需要重启
+            QMessageBox.information(self, "设置已更新", "新的快捷键和颜色主题已应用。")
 
     def _load_initial_settings(self):
+        # 应用样式
+        self.apply_stylesheet()
+
+        # 加载路径
         self.original_path_selector.set_path(self.model.get_path('original_path'))
         self.denoised_path_selector.set_path(self.model.get_path('denoised_path'))
         self.mask_path_selector.set_path(self.model.get_path('mask_path'))

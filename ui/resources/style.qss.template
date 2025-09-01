@@ -1,0 +1,75 @@
+/* ui/resources/style.qss.template */
+
+QWidget {
+    background-color: @background-color-dark;
+    color: @text-color;
+    font-family: "Segoe UI", "Microsoft YaHei";
+    font-size: 10pt;
+}
+
+QMainWindow {
+    background-color: @background-color-darkest;
+}
+
+QFrame {
+    border: 1px solid @border-color;
+    border-radius: 4px;
+    padding: 5px;
+}
+
+QPushButton {
+    background-color: @border-color;
+    border: 1px solid @border-color-hover;
+    border-radius: 4px;
+    padding: 5px 10px;
+    min-height: 20px;
+}
+
+QPushButton:hover {
+    background-color: @border-color-hover;
+    border-color: #6a6b6c; /* 可以也换成变量 */
+}
+
+QPushButton:pressed {
+    background-color: @background-color-light;
+}
+
+QLineEdit {
+    background-color: @background-color-light;
+    border: 1px solid @border-color-hover;
+    border-radius: 4px;
+    padding: 5px;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+}
+
+QSlider::groove:horizontal {
+    border: 1px solid @border-color;
+    height: 8px;
+    background: @background-color-light;
+    margin: 2px 0;
+    border-radius: 4px;
+}
+
+QSlider::handle:horizontal {
+    background: #78797a; /* 可以也换成变量 */
+    border: 1px solid @border-color-hover;
+    width: 18px;
+    margin: -5px 0; 
+    border-radius: 9px;
+}
+
+QSplitter::handle {
+    background: @border-color;
+}
+
+QSplitter::handle:horizontal {
+    width: 4px;
+}
+
+QSplitter::handle:vertical {
+    height: 4px;
+}
