@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup, QRadioButton, QLabel, QGroupBox
 )
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtGui import QAction, QKeySequence, QIcon
 
 from ..core.app_model import AppModel
 from ..core.image_manager import ImageManager
@@ -27,6 +27,8 @@ class MainWindow(QMainWindow):
 
         self.active_actions = []
 
+        self.set_application_icon()
+
         self.init_ui()
         self._create_menu()
         self._create_actions_and_shortcuts()
@@ -40,6 +42,19 @@ class MainWindow(QMainWindow):
 
         self._load_initial_settings()
         self.initial_state = self.saveState()  
+
+    def set_application_icon(self):
+        """加载并设置应用程序的图标。"""
+        # 使用 __file__ 可以确保我们总能从当前文件位置找到正确的相对路径
+        # 这是一个非常健壮和推荐的做法
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(script_dir, 'resources', 'icons', 'app_icon.png')
+
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+            print("Application icon set successfully.")
+        else:
+            print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
         self.setWindowTitle("手动抠图工具 V7.0(全新自定义))")
