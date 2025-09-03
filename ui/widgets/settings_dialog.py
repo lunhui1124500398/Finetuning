@@ -4,7 +4,7 @@ import configparser
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTabWidget, QWidget,
     QFormLayout, QLabel, QLineEdit, QColorDialog, QScrollArea, QFrame,
-    QMessageBox, QFileDialog
+    QMessageBox, QFileDialog, QComboBox, QGroupBox
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
@@ -13,7 +13,6 @@ from .key_sequence_edit import KeySequenceEdit
 
 class SettingsDialog(QDialog):
     def __init__(self, config: configparser.ConfigParser, parent=None):
-        # ... (构造函数上半部分无变化) ...
         super().__init__(parent)
         self.config = config
         self.setWindowTitle("设置")
@@ -22,12 +21,13 @@ class SettingsDialog(QDialog):
         self.key_editors = {}
         self.color_buttons = {}
         self.color_labels = {}
+        self.theme_combo = None # 新增主题下拉框成员变量
+        self._loading_theme = False # 新增一个标志位，防止加载时触发信号
 
         self.init_ui()
         self.load_settings()
 
     def init_ui(self):
-        # ... (此函数内部无变化) ...
         main_layout = QVBoxLayout(self)
         
         self.tabs = QTabWidget()
@@ -63,7 +63,6 @@ class SettingsDialog(QDialog):
         self.export_button.clicked.connect(self.export_settings)
     
     def setup_keybindings_tab(self, parent_widget):
-        # ... (此函数内部无变化) ...
         scroll_area = QScrollArea(parent_widget)
         scroll_area.setWidgetResizable(True)
         
@@ -84,7 +83,6 @@ class SettingsDialog(QDialog):
         parent_layout.addWidget(scroll_area)
         
     def setup_appearance_tab(self, parent_widget):
-        # ... (此函数内部无变化) ...
         scroll_area = QScrollArea(parent_widget)
         scroll_area.setWidgetResizable(True)
         container = QWidget()
@@ -92,6 +90,19 @@ class SettingsDialog(QDialog):
         
         main_layout = QVBoxLayout(container)
         
+        # --- START: 新增主题选择部分 ---
+        theme_group = QGroupBox("界面主题")
+        theme_layout = QHBoxLayout(theme_group)
+        self.theme_combo = QComboBox()
+        # 从配置文件中找到所有以 "Theme_" 开头的节
+        theme_names = [s.split('_', 1)[1] for s in self.config.sections() if s.startswith('Theme_')]
+        self.theme_combo.addItems(theme_names)
+        self.theme_combo.addItem("Custom") # 添加自定义选项
+        theme_layout.addWidget(QLabel("选择预设主题:"))
+        theme_layout.addWidget(self.theme_combo)
+        main_layout.addWidget(theme_group)
+        # --- END: 新增主题选择部分 ---
+
         qss_group = QFrame()
         qss_group.setFrameShape(QFrame.Shape.StyledPanel)
         qss_layout = QFormLayout(qss_group)
@@ -117,15 +128,15 @@ class SettingsDialog(QDialog):
         parent_layout = QVBoxLayout(parent_widget)
         parent_layout.addWidget(scroll_area)
 
-    # --- START: 修改 add_color_picker ---
+        # 连接信号
+        self.theme_combo.currentTextChanged.connect(self._on_theme_selected)
+
     def add_color_picker(self, layout, key, section):
         label_text = key.replace('_', ' ').title()
         
         h_layout = QHBoxLayout()
         color_label = QLabel()
         color_label.setFixedSize(20, 20)
-        # --- FIX: 不再需要 setAutoFillBackground 和 QPalette ---
-        # --- 为色块添加一个边框，使其在任何背景下都清晰可见 ---
         color_label.setStyleSheet("border: 1px solid #888;")
         
         line_edit = QLineEdit()
@@ -142,11 +153,11 @@ class SettingsDialog(QDialog):
         self.color_buttons[(section, key)] = button
         self.color_labels[(section, key)] = (color_label, line_edit)
 
+        # 当用户点击颜色选择按钮时，我们认为他们可能要自定义，于是切换到 Custom
+        button.clicked.connect(lambda: self.theme_combo.setCurrentText("Custom"))
         button.clicked.connect(lambda _, s=section, k=key: self.open_color_dialog(s, k))
-    # --- END: 修改 add_color_picker ---
     
     def open_color_dialog(self, section, key):
-        # ... (此函数内部无变化) ...
         _, line_edit = self.color_labels[(section, key)]
         current_value = line_edit.text()
         
@@ -173,57 +184,84 @@ class SettingsDialog(QDialog):
             
             self.update_color_preview(section, key, new_value)
             
-    # --- START: 修改 update_color_preview ---
     def update_color_preview(self, section, key, value_str):
-        """安全地更新颜色预览UI，使用样式表填充色块。"""
         widget_pair = self.color_labels.get((section, key))
-        
-        if not widget_pair:
-            return
+        if not widget_pair: return
             
         color_label, line_edit = widget_pair
         line_edit.setText(value_str)
         
-        color = QColor()
-        color_qss_string = "transparent" # 默认透明
+        color_qss_string = "transparent"
         
         if ',' in value_str: # RGBA
             try:
                 r, g, b, a = map(int, value_str.split(','))
-                color.setRgb(r, g, b, a)
-                # QSS支持rgba格式，这对于显示透明度至关重要
                 color_qss_string = f"rgba({r}, {g}, {b}, {a})"
             except (ValueError, TypeError): pass
         else: # Hex
-            color.setNamedColor(value_str)
-            color_qss_string = color.name()
+            color_qss_string = value_str
 
-        # --- FIX: 使用样式表动态设置背景色，比QPalette更可靠 ---
         color_label.setStyleSheet(f"background-color: {color_qss_string}; border: 1px solid #888;")
-    # --- END: 修改 update_color_preview ---
     
     def load_settings(self):
-        # ... (此函数内部无变化) ...
+        # 加载快捷键
         for key, editor in self.key_editors.items():
             value = self.config.get('Keybindings', key, fallback='')
             editor.setText(value)
         
+        # 加载颜色
         sections_to_load = ['QSS_Colors', 'Colors']
         for section in sections_to_load:
             if self.config.has_section(section):
                 for key, value in self.config.items(section):
                     self.update_color_preview(section, key, value)
+        
+        # --- START: 加载主题设置 ---
+        self._loading_theme = True
+        last_theme = self.config.get('Theme', 'current_theme', fallback='Dark')
+        
+        # 检查当前 QSS_Colors 是否与 last_theme 的预设匹配
+        is_custom = False
+        theme_section_name = f"Theme_{last_theme}"
+        if self.config.has_section(theme_section_name):
+            for key, value in self.config.items('QSS_Colors'):
+                preset_value = self.config.get(theme_section_name, key, fallback=None)
+                if preset_value is None or value != preset_value:
+                    is_custom = True
+                    break
+        else:
+            # 如果上次保存的主题不存在，也标记为自定义
+            is_custom = True
 
-    # ... (其余所有方法 save_settings, save_and_accept, confirm_restore_defaults, restore_defaults, export_settings, import_settings 均无变化) ...
+        if is_custom:
+            self.theme_combo.setCurrentText("Custom")
+        else:
+            self.theme_combo.setCurrentText(last_theme)
+        
+        self._loading_theme = False
+        # --- END: 加载主题设置 ---
+
     def save_settings(self):
-        """将UI中的设置保存到config对象。"""
+        # 保存快捷键
         for key, editor in self.key_editors.items():
             self.config.set('Keybindings', key, editor.text())
+            
+        # 保存颜色到 QSS_Colors (当前激活的颜色)
         for (section, key), (_, line_edit) in self.color_labels.items():
              self.config.set(section, key, line_edit.text())
 
+        # --- START: 保存主题设置 ---
+        # 【修复】在写入之前，确保 'Theme' 部分一定存在
+        if not self.config.has_section('Theme'):
+            self.config.add_section('Theme')
+
+        current_theme_selection = self.theme_combo.currentText()
+        if current_theme_selection != "Custom":
+             # 现在可以安全地写入了
+             self.config.set('Theme', 'current_theme', current_theme_selection)
+        # --- END: 保存主题设置 ---
+
     def save_and_accept(self):
-        """保存设置并关闭对话框。"""
         self.save_settings()
         self.accept()
 
@@ -236,58 +274,27 @@ class SettingsDialog(QDialog):
             self.restore_defaults()
 
     def restore_defaults(self):
-        defaults = {
-            'Keybindings': {
-                'next_image': "D; Right", 'prev_image': "A; Left", 'save': "Ctrl+S",
-                'save_and_nect': "S", 'draw_mode': "Q", 'erase_mode': "E",
-                'clear_mask': "W", 'toggle_mask': "Z", 'auto_save': "X",
-                'high_contrast': "C", 'import_files': "I", 'toggle_image_source': "Space"
-            },
-            'Colors': {
-                'mask_overlay_color': "255, 0, 0, 80",
-                'contour_line_color': "0, 255, 0, 100",
-                'inner_contour_color': "0, 255, 0, 100",
-                'contour_thickness': "1"
-            },
-            'QSS_Colors': {
-                'background-color-darkest': "#252627",
-                'background-color-dark': "#2e2f30",
-                'background-color-light': "#3a3b3c",
-                'border-color': "#4a4b4c",
-                'border-color-hover': "#5a5b5c",
-                'text-color': "#e0e0e0"
-            }
-        }
-        
-        temp_config = configparser.ConfigParser()
-        temp_config.read_dict(defaults)
+        # 从 Dark 主题预设中恢复颜色
+        if self.config.has_section('Theme_Dark'):
+             self._on_theme_selected('Dark')
 
-        for section in temp_config.sections():
-            for key, value in temp_config.items(section):
-                if section == 'Keybindings':
-                    if key in self.key_editors:
-                        self.key_editors[key].setText(value)
-                else:
-                    self.update_color_preview(section, key, value)
+        # 恢复默认快捷键
+        defaults_keys = {
+            'next_image': "D; Right", 'prev_image': "A; Left", 'save': "Ctrl+S",
+            'save_and_nect': "S", 'draw_mode': "Q", 'erase_mode': "E", 'polygon_mode': "P",
+            'clear_mask': "W", 'toggle_mask': "Z", 'auto_save': "X",
+            'high_contrast': "C", 'import_files': "I", 'toggle_image_source': "Space"
+        }
+        for key, value in defaults_keys.items():
+             if key in self.key_editors:
+                 self.key_editors[key].setText(value)
         
         QMessageBox.information(self, "成功", "设置已恢复为默认值。请点击“应用并保存”以生效。")
 
     def export_settings(self):
-        temp_config = configparser.ConfigParser()
+        # 导出前先将当前UI上的设置暂存
+        self.save_settings()
         
-        for section in self.config.sections():
-            if not temp_config.has_section(section):
-                temp_config.add_section(section)
-            for key, value in self.config.items(section):
-                temp_config.set(section, key, value)
-        
-        for key, editor in self.key_editors.items():
-            temp_config.set('Keybindings', key, editor.text())
-        for (section, key), (_, line_edit) in self.color_labels.items():
-            if not temp_config.has_section(section):
-                temp_config.add_section(section)
-            temp_config.set(section, key, line_edit.text())
-
         file_path, _ = QFileDialog.getSaveFileName(
             self, "导出配置", "", "配置文件 (*.ini);;所有文件 (*)"
         )
@@ -295,7 +302,7 @@ class SettingsDialog(QDialog):
         if file_path:
             try:
                 with open(file_path, 'w', encoding='utf-8') as configfile:
-                    temp_config.write(configfile)
+                    self.config.write(configfile)
                 QMessageBox.information(self, "成功", f"配置已成功导出到:\n{file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"导出配置失败: {e}")
@@ -307,22 +314,39 @@ class SettingsDialog(QDialog):
 
         if file_path:
             try:
+                # 导入配置并直接更新UI
                 imported_config = configparser.ConfigParser()
                 imported_config.read(file_path, encoding='utf-8')
-
-                if imported_config.has_section('Keybindings'):
-                    for key, editor in self.key_editors.items():
-                        value = imported_config.get('Keybindings', key, fallback=editor.text())
-                        editor.setText(value)
                 
-                sections_to_load = ['QSS_Colors', 'Colors']
-                for section in sections_to_load:
-                    if imported_config.has_section(section):
-                        for key, value in imported_config.items(section):
-                            if (section, key) in self.color_labels:
-                                self.update_color_preview(section, key, value)
+                # 创建一个新的 config 对象来更新，以免污染原始的
+                temp_config = configparser.ConfigParser()
+                temp_config.read_dict(self.config) # 复制现有配置
+                
+                # 用导入的配置覆盖
+                for section in imported_config.sections():
+                    if not temp_config.has_section(section):
+                        temp_config.add_section(section)
+                    for key, value in imported_config.items(section):
+                        temp_config.set(section, key, value)
+                
+                # 将这个临时的配置对象加载到UI上
+                self.config = imported_config
+                self.load_settings()
 
                 QMessageBox.information(self, "成功", "配置已成功加载。\n请检查设置，然后点击“应用并保存”使其生效。")
-
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"导入配置失败: {e}")
+
+    def _on_theme_selected(self, theme_name):
+        """当用户在下拉框中选择一个主题时调用"""
+        if self._loading_theme or theme_name == "Custom":
+            return
+        
+        theme_section_name = f"Theme_{theme_name}"
+        if not self.config.has_section(theme_section_name):
+            print(f"警告: 未在配置文件中找到主题节: {theme_section_name}")
+            return
+            
+        # 将选定主题的颜色加载到UI的颜色选择器中
+        for key, value in self.config.items(theme_section_name):
+            self.update_color_preview('QSS_Colors', key, value)

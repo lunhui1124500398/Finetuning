@@ -341,7 +341,6 @@ class ImageManager:
     @staticmethod
     def process_selection_path(path: QPainterPath, image_size) -> tuple[bool, QPainterPath]:
         """
-        【最终版 - 直接构建像素路径】
         通过检查每个像素的中心点是否在路径内来确定选中的像素集合，
         然后直接由这些像素的矩形区域构建最终的、像素对齐的路径。
         """
