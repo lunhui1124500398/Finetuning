@@ -10,8 +10,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence, QIcon
 
-from ..core.app_model import AppModel
-from ..core.image_manager import ImageManager
+from core.app_model import AppModel
+from core.image_manager import ImageManager
 from .widgets.path_selector import PathSelector
 from .widgets.image_canvas import ImageCanvas
 from .widgets.preview_panel import PreviewPanel
@@ -57,7 +57,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V7.0(全新自定义))")
+        self.setWindowTitle("手动抠图工具 V7.2(全新自定义))")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()

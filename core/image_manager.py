@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image, ImageQt
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBitmap, QPainterPath, QPolygonF
 from PyQt6.QtCore import Qt, QPointF
-from Finetuning.utils.debugger import debugger
+from utils.debugger import debugger
 
 class ImageManager:
     """处理所有图像加载、处理、保存等任务。"""
@@ -344,7 +344,7 @@ class ImageManager:
         通过检查每个像素的中心点是否在路径内来确定选中的像素集合，
         然后直接由这些像素的矩形区域构建最终的、像素对齐的路径。
         """
-        from Finetuning.utils.debugger import debugger
+        from utils.debugger import debugger
         from PyQt6.QtCore import QPointF, QRectF # 确保导入 QPointF 和 QRectF
 
         debugger.log("--- Starting FINAL process_selection_path (Direct Path Build) ---")

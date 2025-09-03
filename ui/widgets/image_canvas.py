@@ -7,7 +7,7 @@ from PyQt6.QtGui import (
     QPolygonF, QImage, QPainterPathStroker
 )
 import os
-from Finetuning.utils.debugger import debugger
+from utils.debugger import debugger
 
 # --- create_cursor 函数 (无变动) ---
 def create_cursor(text):

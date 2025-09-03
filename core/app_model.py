@@ -100,7 +100,7 @@ class AppModel(QObject):
         self.set_current_index(self._current_index - 1)
 
     def update_file_lists(self, original_path, denoised_path, mask_path):
-        from ..core.image_manager import ImageManager
+        from core.image_manager import ImageManager
         self._original_files = ImageManager.get_image_files(original_path)
         self._denoised_files = ImageManager.get_image_files(denoised_path) if denoised_path else []
         self._mask_files = ImageManager.get_image_files(mask_path) if mask_path else []

@@ -3,7 +3,7 @@
 import sys
 import os # 确保导入了 os
 from PyQt6.QtWidgets import QApplication
-from .ui.main_window import MainWindow
+from ui.main_window import MainWindow
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
