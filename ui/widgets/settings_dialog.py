@@ -73,6 +73,8 @@ class SettingsDialog(QDialog):
         self.import_button.clicked.connect(self.import_settings)
         self.export_button.clicked.connect(self.export_settings)
 
+        self.generate_theme_button.clicked.connect(self._on_generate_theme_clicked)
+
     def setup_keybindings_tab(self, parent_widget):
         scroll_area = QScrollArea(parent_widget)
         scroll_area.setWidgetResizable(True)
@@ -103,15 +105,25 @@ class SettingsDialog(QDialog):
         
         # --- START: 新增主题选择部分 ---
         theme_group = QGroupBox("界面主题")
-        theme_layout = QHBoxLayout(theme_group)
+        theme_layout = QVBoxLayout(theme_group) # 改为QVBoxLayout以容纳更多控件
+        
+        # 原有的主题下拉框
+        top_theme_layout = QHBoxLayout()
         self.theme_combo = QComboBox()
-        # 从配置文件中找到所有以 "Theme_" 开头的节
         theme_names = [s.split('_', 1)[1] for s in self.config.sections() if s.startswith('Theme_')]
         self.theme_combo.addItems(theme_names)
-        self.theme_combo.addItem("Custom") # 添加自定义选项
-        theme_layout.addWidget(QLabel("选择预设主题:"))
-        theme_layout.addWidget(self.theme_combo)
+        self.theme_combo.addItem("Custom")
+        top_theme_layout.addWidget(QLabel("选择预设主题:"))
+        top_theme_layout.addWidget(self.theme_combo)
+
+        # 新增的“根据主色调生成”按钮
+        self.generate_theme_button = QPushButton("🎨 根据主色调生成...")
+        
+        theme_layout.addLayout(top_theme_layout)
+        theme_layout.addWidget(self.generate_theme_button)
+        
         main_layout.addWidget(theme_group)
+
         # --- END: 新增主题选择部分 ---
 
         qss_group = QFrame()
@@ -380,3 +392,62 @@ class SettingsDialog(QDialog):
         # 将选定主题的颜色加载到UI的颜色选择器中
         for key, value in self.config.items(theme_section_name):
             self.update_color_preview('QSS_Colors', key, value)
+    
+    def _on_generate_theme_clicked(self):
+        """
+        当用户点击“根据主色调生成”按钮时触发。
+        """
+        # 1. 弹出颜色选择对话框
+        initial_color = QColor(self.config.get('QSS_Colors', 'background-color-dark', fallback='#34495e'))
+        base_color = QColorDialog.getColor(initial_color, self, "请选择一个主色调")
+
+        if not base_color.isValid():
+            return # 用户取消了选择
+
+        # 2. 调用颜色派生逻辑
+        color_theme = self._calculate_color_theme(base_color)
+
+        # 3. 更新UI上的颜色选择器
+        for key, value in color_theme.items():
+            self.update_color_preview('QSS_Colors', key, value)
+        
+        # 4. 自动将主题设置为 "Custom"
+        self.theme_combo.setCurrentText("Custom")
+
+    def _calculate_color_theme(self, base_color: QColor) -> dict:
+        """
+        根据一个基础颜色，计算出一整套UI主题颜色。
+        返回一个包含 QSS_Colors 键和新颜色值的字典。
+        """
+        # 使用 HSL 颜色空间进行计算
+        base_h = base_color.hslHueF()
+        base_s = base_color.hslSaturationF()
+        base_l = base_color.lightnessF()
+
+        # 定义派生规则 (这些百分比可以根据喜好调整)
+        darkest_l = max(0, base_l * 0.85)
+        dark_l = base_l
+        light_l = min(1, base_l * 1.25)
+        border_l = min(1, base_l * 1.5)
+        border_hover_l = min(1, base_l * 1.7)
+
+        # 创建新的 QColor 对象
+        darkest_color = QColor.fromHslF(base_h, base_s * 0.9, darkest_l)
+        dark_color = QColor.fromHslF(base_h, base_s, dark_l)
+        light_color = QColor.fromHslF(base_h, base_s, light_l)
+        border_color = QColor.fromHslF(base_h, base_s * 0.95, border_l)
+        border_hover_color = QColor.fromHslF(base_h, base_s, border_hover_l)
+        
+        # 判断文字颜色
+        # 感知亮度公式: Y = 0.299*R + 0.587*G + 0.114*B
+        luminance = (0.299 * base_color.red() + 0.587 * base_color.green() + 0.114 * base_color.blue())
+        text_color = QColor("#e0e0e0") if luminance < 128 else QColor("#1a1a1a")
+
+        return {
+            'background-color-darkest': darkest_color.name(),
+            'background-color-dark': dark_color.name(),
+            'background-color-light': light_color.name(),
+            'border-color': border_color.name(),
+            'border-color-hover': border_hover_color.name(),
+            'text-color': text_color.name()
+        }
