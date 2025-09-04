@@ -210,7 +210,6 @@ class PreviewPanel(QWidget):
             label.setPixmap(QPixmap())
 
     def get_pixmap_for_type(self, index, image_type):
-        # (此函数内部无变动)
         if not (0 <= index < len(self.model._original_files)): return None
         base_pixmap = None
         if image_type == "denoised":
@@ -218,9 +217,20 @@ class PreviewPanel(QWidget):
                 base_pixmap = self.image_manager.load_pixmap(self.model._denoised_files[index])
         else:
             base_pixmap = self.image_manager.load_pixmap(self.model._original_files[index])
+        
         if not base_pixmap: return None
+
+        # 【已修复】将对 apply_clahe 的调用替换为 apply_image_effects
         if self.column_contrast_state.get(image_type, False):
-            base_pixmap = self.image_manager.apply_clahe(base_pixmap)
+            clahe_settings = {
+                'algo_enabled': True,
+                'algo_name': 'clahe',
+                'clahe_clip_limit': 2.0,
+                'clahe_grid_size': 8,
+                'manual_enabled': False # 确保手动调整是关闭的
+            }
+            base_pixmap = self.image_manager.apply_image_effects(base_pixmap, clahe_settings)
+
         if image_type in ["overlay", "saved_overlay"]:
             mask_pixmap = None
             if image_type == "overlay":
@@ -230,11 +240,13 @@ class PreviewPanel(QWidget):
                     mask_pixmap = self._get_saved_mask(index)
             elif image_type == "saved_overlay":
                 mask_pixmap = self._get_saved_mask(index)
+            
             if mask_pixmap:
                 style = self.model.config['Preview'].get('overlay_style', 'area')
                 color_str = self.model.config['Colors'].get('mask_overlay_color', '255,0,0,100')
                 color_rgba = tuple(map(int, color_str.split(',')))
                 return self.image_manager.create_overlay_pixmap(base_pixmap, mask_pixmap, style, color_rgba)
+                
         return base_pixmap
 
     def _get_saved_mask(self, index):

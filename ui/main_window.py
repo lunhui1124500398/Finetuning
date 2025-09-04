@@ -130,13 +130,13 @@ class MainWindow(QMainWindow):
         # 其他选项
         other_options_layout = QHBoxLayout()
         self.mask_invert_checkbox = QCheckBox("反相显示")
-        self.high_contrast_checkbox = QCheckBox("高对比度 (C)")
+        # 【已移除】 self.high_contrast_checkbox = QCheckBox("高对比度 (C)")
         
         self.lock_zoom_checkbox = QCheckBox("固定缩放")
         other_options_layout.addWidget(self.lock_zoom_checkbox)
 
         other_options_layout.addWidget(self.mask_invert_checkbox)
-        other_options_layout.addWidget(self.high_contrast_checkbox)
+        # 【已移除】 other_options_layout.addWidget(self.high_contrast_checkbox)
 
         auto_save_layout = QHBoxLayout()
         self.auto_save_checkbox = QCheckBox("自动保存 (X)")
@@ -379,7 +379,7 @@ class MainWindow(QMainWindow):
             return
         if self.canvas.save_current_mask():
             self.model.increment_index()
-  
+    
     def apply_stylesheet(self):
         """根据配置文件动态生成并应用QSS样式表。"""
         script_dir = os.path.dirname(os.path.abspath(__file__))
