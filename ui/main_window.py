@@ -391,25 +391,29 @@ class MainWindow(QMainWindow):
     def open_settings_dialog(self):
         """打开设置对话框，并在保存后应用更改。"""
         dialog = SettingsDialog(self.model.config, self)
-        if dialog.exec():  # 如果用户点击了 "应用并保存"
-            # 1. 保存配置到文件
-            try:
-                with open(self.model.config_path, 'w', encoding='utf-8') as configfile:
-                    self.model.config.write(configfile)
-                print("Settings saved successfully.")
-            except Exception as e:
-                QMessageBox.critical(self, "错误", f"保存设置失败: {e}")
-                return
 
-            # 2. 重新加载配置到模型
-            self.model.load_config()
+        # 1. 连接对话框的 'settings_applied' 信号到新的槽函数
+        dialog.settings_applied.connect(self.apply_settings_from_dialog)
+        # 2. 直接执行对话框。保存逻辑现在由对话框内部处理
+        dialog.exec()
 
-            # 3. 重新应用样式和快捷键
-            self.apply_stylesheet()
-            self._create_actions_and_shortcuts()
-            
-            # 4. (可选) 提示用户某些更改可能需要重启
-            QMessageBox.information(self, "设置已更新", "新的快捷键和颜色主题已应用。")
+    @pyqtSlot()
+    def apply_settings_from_dialog(self):
+        """
+        当设置对话框发出'settings_applied'信号时，此方法被调用。
+        它会从内存中已更新的config对象刷新UI。
+        """
+        print("Applying settings changes from dialog...")
+        
+        # a. 重新应用样式表
+        self.apply_stylesheet()
+        
+        # b. 重新创建快捷键
+        self._create_actions_and_shortcuts()
+        
+        # c. 强制刷新依赖于配置的UI组件（如颜色）
+        self.canvas.update_selection_display()
+        self.preview_panel.update_previews(self.model.current_index)
 
     def _load_initial_settings(self):
         # 应用样式

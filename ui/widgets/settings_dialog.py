@@ -7,22 +7,27 @@ from PyQt6.QtWidgets import (
     QMessageBox, QFileDialog, QComboBox, QGroupBox
 )
 from PyQt6.QtGui import QColor
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from .key_sequence_edit import KeySequenceEdit
 
 class SettingsDialog(QDialog):
+    settings_applied = pyqtSignal()
+
     def __init__(self, config: configparser.ConfigParser, parent=None):
         super().__init__(parent)
         self.config = config
+        # 3. 从父窗口获取配置文件路径，以便保存
+        self.config_path = parent.model.config_path if parent and hasattr(parent, 'model') else None
+
         self.setWindowTitle("设置")
         self.setMinimumSize(600, 500)
 
         self.key_editors = {}
         self.color_buttons = {}
         self.color_labels = {}
-        self.theme_combo = None # 新增主题下拉框成员变量
-        self._loading_theme = False # 新增一个标志位，防止加载时触发信号
+        self.theme_combo = None 
+        self._loading_theme = False
 
         self.init_ui()
         self.load_settings()
@@ -45,23 +50,29 @@ class SettingsDialog(QDialog):
         self.import_button = QPushButton("导入配置...")
         self.export_button = QPushButton("导出配置...")
         self.restore_button = QPushButton("恢复默认")
-        self.ok_button = QPushButton("应用并保存")
-        self.cancel_button = QPushButton("取消")
+        # 创建新的功能按钮
+        self.apply_button = QPushButton("应用")
+        self.save_button = QPushButton("保存")
+        self.close_button = QPushButton("关闭")
         
         button_layout.addWidget(self.import_button)
         button_layout.addWidget(self.export_button)
         button_layout.addWidget(self.restore_button)
         button_layout.addStretch()
-        button_layout.addWidget(self.ok_button)
-        button_layout.addWidget(self.cancel_button)
+        button_layout.addWidget(self.apply_button)
+        button_layout.addWidget(self.save_button)
+        button_layout.addWidget(self.close_button)
         main_layout.addLayout(button_layout)
 
-        self.ok_button.clicked.connect(self.save_and_accept)
-        self.cancel_button.clicked.connect(self.reject)
+        self.apply_button.clicked.connect(self.apply_changes)
+        self.save_button.clicked.connect(self.save_changes_to_file)
+        self.close_button.clicked.connect(self.accept) # accept() 会关闭对话框
+
+        # 连接其他按钮
         self.restore_button.clicked.connect(self.confirm_restore_defaults)
         self.import_button.clicked.connect(self.import_settings)
         self.export_button.clicked.connect(self.export_settings)
-    
+
     def setup_keybindings_tab(self, parent_widget):
         scroll_area = QScrollArea(parent_widget)
         scroll_area.setWidgetResizable(True)
@@ -130,6 +141,29 @@ class SettingsDialog(QDialog):
 
         # 连接信号
         self.theme_combo.currentTextChanged.connect(self._on_theme_selected)
+    
+    def apply_changes(self):
+        """将UI上的设置保存到内存中的config对象，并发出信号通知主窗口刷新。"""
+        self.save_settings()
+        self.settings_applied.emit()
+        print("Settings applied to current session.")
+    
+    def save_changes_to_file(self):
+        """先应用更改，然后将内存中的config对象写入到 .ini 文件。"""
+        # 首先，确保当前UI上的修改被应用
+        self.apply_changes()
+
+        # 然后，写入文件
+        if not self.config_path:
+            QMessageBox.critical(self, "错误", "配置文件路径未设置，无法保存。")
+            return
+            
+        try:
+            with open(self.config_path, 'w', encoding='utf-8') as configfile:
+                self.config.write(configfile)
+            QMessageBox.information(self, "成功", "设置已成功保存到文件。")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存设置失败: {e}")
 
     def add_color_picker(self, layout, key, section):
         label_text = key.replace('_', ' ').title()
@@ -260,10 +294,6 @@ class SettingsDialog(QDialog):
              # 现在可以安全地写入了
              self.config.set('Theme', 'current_theme', current_theme_selection)
         # --- END: 保存主题设置 ---
-
-    def save_and_accept(self):
-        self.save_settings()
-        self.accept()
 
     def confirm_restore_defaults(self):
         reply = QMessageBox.question(self, '恢复默认设置',
