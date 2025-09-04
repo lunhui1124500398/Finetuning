@@ -5,7 +5,7 @@ import sys
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QCheckBox, QFrame, QSplitter, QMessageBox, QDockWidget,
-    QButtonGroup, QRadioButton, QLabel, QGroupBox
+    QButtonGroup, QRadioButton, QLabel, QGroupBox, QDialog
 )
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence, QIcon
@@ -26,6 +26,9 @@ class MainWindow(QMainWindow):
         
         self.model = AppModel()
         self.image_manager = ImageManager()
+        
+        # 【修改 1】初始化一个属性来持有效果对话框的实例
+        self.effects_dialog = None
 
         self.active_actions = []
 
@@ -47,8 +50,6 @@ class MainWindow(QMainWindow):
 
     def set_application_icon(self):
         """加载并设置应用程序的图标。"""
-        # 使用 __file__ 可以确保我们总能从当前文件位置找到正确的相对路径
-        # 这是一个非常健壮和推荐的做法
         script_dir = os.path.dirname(os.path.abspath(__file__))
         icon_path = os.path.join(script_dir, 'resources', 'icons', 'app_icon.png')
 
@@ -66,7 +67,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
 
-        # --- Path Dock Widget (无变动) ---
         self.path_dock_widget = QDockWidget("路径设置 (可拖拽)", self)
         self.path_dock_widget.setObjectName("PathDockWidget")
         self.path_dock_widget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
@@ -85,7 +85,6 @@ class MainWindow(QMainWindow):
         self.path_dock_widget.setWidget(path_widget)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.path_dock_widget)
         
-        # --- Main Splitter, Canvas Area (无变动) ---
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         canvas_area = QFrame()
         canvas_area.setFrameShape(QFrame.Shape.StyledPanel)
@@ -95,20 +94,16 @@ class MainWindow(QMainWindow):
         canvas_layout.addWidget(self.canvas)
         canvas_layout.addWidget(self.progress_slider)
         
-        # --- Right Splitter, Preview Panel (无变动) ---
         self.right_splitter = QSplitter(Qt.Orientation.Vertical)
         self.preview_panel = PreviewPanel(self.model, self.image_manager, canvas_widget=self.canvas)
         
-        # --- Function Frame ---
         function_frame = QFrame()
         function_frame.setFrameShape(QFrame.Shape.StyledPanel)
         function_layout = QVBoxLayout(function_frame)
 
-        # --- START: 重构 Display Options Group ---
         display_group = QGroupBox("显示选项")
         display_layout = QVBoxLayout(display_group)
         
-        # 新的显示模式单选框
         display_mode_layout = QHBoxLayout()
         self.hide_radio = QRadioButton("隐藏")
         self.area_radio = QRadioButton("面积")
@@ -127,16 +122,12 @@ class MainWindow(QMainWindow):
         display_mode_layout.addWidget(self.contour_radio)
         display_mode_layout.addWidget(self.ants_radio)
 
-        # 其他选项
         other_options_layout = QHBoxLayout()
         self.mask_invert_checkbox = QCheckBox("反相显示")
-        # 【已移除】 self.high_contrast_checkbox = QCheckBox("高对比度 (C)")
         
         self.lock_zoom_checkbox = QCheckBox("固定缩放")
         other_options_layout.addWidget(self.lock_zoom_checkbox)
-
         other_options_layout.addWidget(self.mask_invert_checkbox)
-        # 【已移除】 other_options_layout.addWidget(self.high_contrast_checkbox)
 
         auto_save_layout = QHBoxLayout()
         self.auto_save_checkbox = QCheckBox("自动保存 (X)")
@@ -145,15 +136,13 @@ class MainWindow(QMainWindow):
         display_layout.addLayout(display_mode_layout)
         display_layout.addLayout(other_options_layout)
         display_layout.addLayout(auto_save_layout)
-        # --- END: 重构 Display Options Group ---
 
         effects_group = QGroupBox("效果设置")
         effects_layout = QHBoxLayout(effects_group)
-        self.high_contrast_checkbox = QCheckBox("图像效果调整 (C)") # 按钮文本稍作修改，更明确
-        effects_layout.addWidget(self.high_contrast_checkbox)
-        effects_layout.addStretch() # 让按钮靠左
+        self.effects_button = QPushButton("图像效果调整 (C)") # 使用 QPushButton 更符合语义
+        effects_layout.addWidget(self.effects_button)
+        effects_layout.addStretch()
 
-        # --- Edit Tools Group (无变动) ---
         tools_group = QGroupBox("编辑工具")
         tools_layout = QVBoxLayout(tools_group)
         tool_buttons_layout = QHBoxLayout()
@@ -181,14 +170,12 @@ class MainWindow(QMainWindow):
         tools_layout.addLayout(tool_buttons_layout)
         tools_layout.addLayout(action_buttons_layout)
 
-        # --- Nav buttons (无变动) ---
         nav_layout = QHBoxLayout()
         self.prev_button = QPushButton("上一张 (A/←)")
         self.next_button = QPushButton("下一张 (D/→)")
         nav_layout.addWidget(self.prev_button)
         nav_layout.addWidget(self.next_button)
 
-        # --- Assemble layout (无变动) ---
         function_layout.addWidget(display_group)
         function_layout.addWidget(effects_group)
         function_layout.addWidget(tools_group)
@@ -203,7 +190,6 @@ class MainWindow(QMainWindow):
         self.main_splitter.setSizes([1200, 600])
         main_layout.addWidget(self.main_splitter)
     
-    # --- _create_menu (无变动) ---
     def _create_menu(self):
         self.menu_bar = self.menuBar()
         file_menu = self.menu_bar.addMenu("文件(&F)")
@@ -232,9 +218,7 @@ class MainWindow(QMainWindow):
         self.settings_action.triggered.connect(self.open_settings_dialog)
         settings_menu.addAction(self.settings_action)
 
-    # --- START: 更新快捷键 ---
     def _create_actions_and_shortcuts(self):
-       # 移除旧的actions
         for action in self.active_actions:
             self.removeAction(action)
         self.active_actions.clear()
@@ -242,16 +226,13 @@ class MainWindow(QMainWindow):
         def create_shortcut(key_name, function):
             shortcut_str = self.model.get_keybinding(key_name)
             if not shortcut_str: return
-
             action = QAction(self)
-            # 支持用分号或逗号分隔的多个快捷键
             shortcuts = [QKeySequence(key.strip()) for key in shortcut_str.replace(';', ',').split(',')]
             action.setShortcuts(shortcuts)
             action.triggered.connect(function)
             self.addAction(action)
-            self.active_actions.append(action) # 跟踪新创建的action
+            self.active_actions.append(action)
         
-        # 映射表，简化代码
         key_map = {
             'next_image': self.model.increment_index,
             'prev_image': self.model.decrement_index,
@@ -261,17 +242,15 @@ class MainWindow(QMainWindow):
             'erase_mode': lambda: self.model.set_selection_tool("erase"),
             'clear_mask': self.canvas.clear_current_selection,
             'import_files': self.import_images,
-            'save_and_next': self.save_and_next, # 修正函数名
+            'save_and_next': self.save_and_next,
             'auto_save': lambda: self.model.set_auto_save(not self.model.auto_save),
             'high_contrast': self.open_effects_chooser,
             'toggle_image_source': self.model.toggle_image_source
         }
         
-        
         for key, func in key_map.items():
             create_shortcut(key, func)
 
-    # --- START: 更新信号连接 ---
     def _connect_signals(self):
         self.import_button.clicked.connect(self.import_images)
         self.prev_button.clicked.connect(self.model.decrement_index)
@@ -288,44 +267,34 @@ class MainWindow(QMainWindow):
         self.polygon_button.toggled.connect(lambda checked: self.model.set_selection_tool("polygon") if checked else None)
         self.erase_selection_button.toggled.connect(lambda checked: self.model.set_selection_tool("erase") if checked else None)
         
-        # 连接新的显示模式单选框
         self.hide_radio.toggled.connect(lambda checked: self.model.set_display_mode("hide") if checked else None)
         self.area_radio.toggled.connect(lambda checked: self.model.set_display_mode("area") if checked else None)
         self.contour_radio.toggled.connect(lambda checked: self.model.set_display_mode("contour") if checked else None)
         self.ants_radio.toggled.connect(lambda checked: self.model.set_display_mode("ants") if checked else None)
 
-        # 连接其他控制选项
         self.auto_save_checkbox.toggled.connect(self.model.set_auto_save)
-        # self.high_contrast_checkbox.toggled.connect(self.model.set_high_contrast)
-        self.high_contrast_checkbox.clicked.connect(self.open_effects_chooser)
+        self.effects_button.clicked.connect(self.open_effects_chooser)
         self.mask_invert_checkbox.toggled.connect(self.model.set_mask_invert)
         self.lock_zoom_checkbox.toggled.connect(self.model.set_zoom_locked)
 
-        # 连接模型信号到UI槽函数
         self.model.index_changed.connect(self.on_index_changed)
         self.model.files_changed.connect(self.on_files_changed)
         self.model.tool_changed.connect(self.on_tool_changed)
         
-        # 连接模型状态变化到UI组件
         self.model.auto_save_changed.connect(self.auto_save_checkbox.setChecked)
-        # self.model.high_contrast_changed.connect(self.high_contrast_checkbox.setChecked)
         self.model.effects_changed.connect(self.canvas.on_effects_changed)
-        self.model.display_mode_changed.connect(self.on_display_mode_changed) # 新信号
+        self.model.display_mode_changed.connect(self.on_display_mode_changed)
         
         self.model.zoom_lock_changed.connect(self.lock_zoom_checkbox.setChecked)
 
-        # 连接模型更新到画布
         self.model.mask_updated.connect(self.canvas.update_selection_display)
-        # self.model.high_contrast_changed.connect(self.canvas.set_high_contrast)
         self.model.preview_effects_changed.connect(self.canvas.on_preview_effects_changed)
-        self.model.display_mode_changed.connect(self.canvas.update_selection_display) # 模式改变时也需刷新画布
+        self.model.display_mode_changed.connect(self.canvas.update_selection_display)
 
         self.model.image_source_changed.connect(self.canvas.on_image_source_changed)
 
         self.model.mask_updated.connect(lambda: self.preview_panel.update_previews(self.model.current_index))
-    # --- END: 更新信号连接 ---
 
-    # --- Slots for Model -> UI updates ---
     @pyqtSlot(str)
     def on_tool_changed(self, tool):
         self.canvas.set_tool(tool)
@@ -336,10 +305,8 @@ class MainWindow(QMainWindow):
         elif tool == 'erase':
             self.erase_selection_button.setChecked(True)
 
-    # --- START: 新增槽函数 ---
     @pyqtSlot(str)
     def on_display_mode_changed(self, mode):
-        """当模型的显示模式改变时，更新UI中的单选框状态"""
         if mode == "hide":
             self.hide_radio.setChecked(True)
         elif mode == "area":
@@ -348,7 +315,6 @@ class MainWindow(QMainWindow):
             self.contour_radio.setChecked(True)
         elif mode == "ants":
             self.ants_radio.setChecked(True)
-    # --- END: 新增槽函数 ---
 
     @pyqtSlot(int)
     def on_index_changed(self, index):
@@ -364,7 +330,6 @@ class MainWindow(QMainWindow):
     def on_files_changed(self, total_files):
         if total_files > 0:
             self.progress_slider.set_range(0, total_files - 1)
-            # 初始化时根据模型默认值设置UI
             self.on_display_mode_changed(self.model.display_mode)
             self.on_index_changed(self.model.current_index)
         else:
@@ -373,7 +338,6 @@ class MainWindow(QMainWindow):
             self.canvas.load_image(-1)
             QMessageBox.information(self, "提示", "在指定路径下未找到图像文件。")
     
-    # --- Other methods (基本无变动) ---
     def save_and_next(self):
         if self.model.current_index < 0:
             return
@@ -381,7 +345,6 @@ class MainWindow(QMainWindow):
             self.model.increment_index()
     
     def apply_stylesheet(self):
-        """根据配置文件动态生成并应用QSS样式表。"""
         script_dir = os.path.dirname(os.path.abspath(__file__))
         template_path = os.path.join(script_dir, 'resources', 'style.qss.template')
         
@@ -389,9 +352,7 @@ class MainWindow(QMainWindow):
             with open(template_path, 'r', encoding='utf-8') as f:
                 template_content = f.read()
             
-            # 替换占位符
             if self.model.config.has_section('QSS_Colors'):
-                # --- FIX: 按键长度降序排序，避免替换出错 ---
                 color_items = self.model.config.items('QSS_Colors')
                 sorted_color_items = sorted(color_items, key=lambda item: len(item[0]), reverse=True)
                 for key, value in sorted_color_items:
@@ -406,37 +367,20 @@ class MainWindow(QMainWindow):
             print(f"Error applying stylesheet: {e}")
 
     def open_settings_dialog(self):
-        """打开设置对话框，并在保存后应用更改。"""
         dialog = SettingsDialog(self.model.config, self)
-
-        # 1. 连接对话框的 'settings_applied' 信号到新的槽函数
         dialog.settings_applied.connect(self.apply_settings_from_dialog)
-        # 2. 直接执行对话框。保存逻辑现在由对话框内部处理
         dialog.exec()
 
     @pyqtSlot()
     def apply_settings_from_dialog(self):
-        """
-        当设置对话框发出'settings_applied'信号时，此方法被调用。
-        它会从内存中已更新的config对象刷新UI。
-        """
         print("Applying settings changes from dialog...")
-        
-        # a. 重新应用样式表
         self.apply_stylesheet()
-        
-        # b. 重新创建快捷键
         self._create_actions_and_shortcuts()
-        
-        # c. 强制刷新依赖于配置的UI组件（如颜色）
         self.canvas.update_selection_display()
         self.preview_panel.update_previews(self.model.current_index)
 
     def _load_initial_settings(self):
-        # 应用样式
         self.apply_stylesheet()
-
-        # 加载路径
         self.original_path_selector.set_path(self.model.get_path('original_path'))
         self.denoised_path_selector.set_path(self.model.get_path('denoised_path'))
         self.mask_path_selector.set_path(self.model.get_path('mask_path'))
@@ -476,23 +420,40 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
     
     def open_effects_chooser(self):
-        # 如果点击的是复选框，操作后恢复其未选中状态，因为它只是个按钮
-        if self.sender() == self.high_contrast_checkbox:
-            self.high_contrast_checkbox.setChecked(False)
-
+        """
+        以非模态方式打开效果对话框，以实现实时预览和交互。
+        """
         if self.model.current_index < 0:
             QMessageBox.warning(self, "提示", "请先加载图像。")
             return
 
-        # 实例化并显示对话框
-        dialog = EffectsDialog(self.model, self)
+        # 【修改 2】检查对话框是否已创建并可见，防止重复打开
+        if self.effects_dialog is None or not self.effects_dialog.isVisible():
+            # 将对话框实例存储在 self.effects_dialog 中，防止其被垃圾回收
+            self.effects_dialog = EffectsDialog(self.model, self)
 
-        # 连接信号，当对话框点击Apply/OK时，正式更新模型
-        def apply_new_settings(settings):
-            # 应用前，先记录撤销状态
-            self.canvas.push_undo_state_for_effects()
-            self.model.update_effect_settings(settings)
+            def apply_new_settings(settings):
+                self.canvas.push_undo_state_for_effects()
+                self.model.update_effect_settings(settings)
+            
+            self.effects_dialog.settings_applied.connect(apply_new_settings)
+            self.effects_dialog.finished.connect(self.on_effects_dialog_finished)
 
-        dialog.settings_applied.connect(apply_new_settings)
+            # 【修改 3】使用 .show() 以非模态方式显示对话框
+            self.effects_dialog.show()
+        else:
+            self.effects_dialog.raise_()
+            self.effects_dialog.activateWindow()
 
-        dialog.exec()
+    def on_effects_dialog_finished(self, result):
+        """
+        【新增方法】当效果对话框关闭时（通过“确定”、“取消”或“X”按钮），此槽函数被调用。
+        """
+        if result != QDialog.DialogCode.Accepted:
+            self.model.revert_preview_to_last_settings()
+        
+        if self.effects_dialog:
+            try:
+                self.effects_dialog.disconnect()
+            except TypeError:
+                pass

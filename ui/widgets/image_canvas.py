@@ -166,7 +166,9 @@ class ImageCanvas(QGraphicsView):
 
     @pyqtSlot()
     def update_selection_display(self, base_pixmap_for_overlay=None):
-        self.update_display_pixmap()
+        # self.update_display_pixmap()
+        if base_pixmap_for_overlay is None:
+            self.update_display_pixmap()
         self._selection_item.setPath(QPainterPath())
 
         mode = self.model.display_mode
