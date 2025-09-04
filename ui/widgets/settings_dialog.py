@@ -323,7 +323,7 @@ class SettingsDialog(QDialog):
         # 恢复默认快捷键
         defaults_keys = {
             'next_image': "D; Right", 'prev_image': "A; Left", 'save': "Ctrl+S",
-            'save_and_nect': "S", 'draw_mode': "Q", 'erase_mode': "E", 'polygon_mode': "P",
+            'save_and_next': "S", 'draw_mode': "Q", 'erase_mode': "E", 'polygon_mode': "P",
             'clear_mask': "W", 'toggle_mask': "Z", 'auto_save': "X",
             'high_contrast': "C", 'import_files': "I", 'toggle_image_source': "Space"
         }

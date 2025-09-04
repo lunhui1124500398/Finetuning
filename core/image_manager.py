@@ -31,37 +31,101 @@ class ImageManager:
             print(f"Error loading image {file_path}: {e}")
             return None
     
-    # --- START: B3. 新增高对比度方法 ---
     @staticmethod
-    def apply_clahe(pixmap: QPixmap) -> QPixmap:
+    def apply_image_effects(pixmap: QPixmap, settings: dict) -> QPixmap:
         if not pixmap or pixmap.isNull():
             return pixmap
 
-        # QPixmap -> QImage -> numpy array
+        # 1. 转换 QPixmap -> NumPy Array
         qimage = pixmap.toImage().convertToFormat(QImage.Format.Format_RGB888)
-        width = qimage.width()
-        height = qimage.height()
+        width, height = qimage.width(), qimage.height()
         ptr = qimage.bits()
         ptr.setsize(qimage.sizeInBytes())
-        arr = np.array(ptr).reshape(height, width, 3)
+        arr = np.array(ptr).reshape(height, width, 3).copy() # 使用 .copy() 避免修改原始数据
 
-        # 转换为灰度图进行处理
-        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-        
-        # 应用CLAHE
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced_gray = clahe.apply(gray)
-        
-        # 将处理后的灰度图转回三通道，以便显示
-        enhanced_rgb = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
+        processed_arr = arr
 
-        # numpy array -> QImage -> QPixmap
-        h, w, ch = enhanced_rgb.shape
+        # 2. 应用手动调整
+        if settings.get('manual_enabled', False):
+            # 对比度 和 亮度
+            contrast = settings.get('manual_contrast', 0)
+            brightness = settings.get('manual_brightness', 0)
+            # alpha (对比度): [-100, 100] -> [0.0, 2.0]
+            alpha = 1.0 + contrast / 100.0
+            # beta (亮度): [-100, 100]
+            beta = brightness
+            processed_arr = cv2.convertScaleAbs(processed_arr, alpha=alpha, beta=beta)
+
+            # Min/Max Levels
+            min_level = settings.get('manual_min', 0)
+            max_level = settings.get('manual_max', 255)
+            if min_level >= max_level: # 防止除零错误
+                max_level = min_level + 1
+
+            # 使用查找表(LUT)进行高效的像素值重映射
+            lut = np.arange(256, dtype=np.uint8)
+            mask = (lut >= min_level) & (lut <= max_level)
+            lut[~mask] = 0 # 小于min的设为0
+            lut[lut > max_level] = 255 # 大于max的设为255
+            lut[mask] = np.uint8(255.0 * (lut[mask] - min_level) / (max_level - min_level))
+
+            processed_arr = cv2.LUT(processed_arr, lut)
+
+        # 3. 应用算法增强
+        if settings.get('algo_enabled', False):
+            # 将彩色图像转为灰度进行处理
+            gray = cv2.cvtColor(processed_arr, cv2.COLOR_RGB2GRAY)
+            enhanced_gray = gray
+
+            algo_name = settings.get('algo_name', 'clahe')
+            if algo_name == 'clahe':
+                clip_limit = settings.get('clahe_clip_limit', 2.0)
+                grid_size = settings.get('clahe_grid_size', 8)
+                clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(grid_size, grid_size))
+                enhanced_gray = clahe.apply(gray)
+            elif algo_name == 'global_histogram_equalization':
+                enhanced_gray = cv2.equalizeHist(gray)
+
+            # 将处理后的灰度图转回三通道RGB
+            processed_arr = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
+
+        # 4. 转换 NumPy Array -> QPixmap
+        h, w, ch = processed_arr.shape
         bytes_per_line = ch * w
-        enhanced_qimage = QImage(enhanced_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        final_qimage = QImage(processed_arr.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+
+        return QPixmap.fromImage(final_qimage)
+    
+    # @staticmethod
+    # def apply_clahe(pixmap: QPixmap) -> QPixmap:
+    #     if not pixmap or pixmap.isNull():
+    #         return pixmap
+
+    #     # QPixmap -> QImage -> numpy array
+    #     qimage = pixmap.toImage().convertToFormat(QImage.Format.Format_RGB888)
+    #     width = qimage.width()
+    #     height = qimage.height()
+    #     ptr = qimage.bits()
+    #     ptr.setsize(qimage.sizeInBytes())
+    #     arr = np.array(ptr).reshape(height, width, 3)
+
+    #     # 转换为灰度图进行处理
+    #     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
         
-        return QPixmap.fromImage(enhanced_qimage)
-    # --- END: B3 ---
+    #     # 应用CLAHE
+    #     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    #     enhanced_gray = clahe.apply(gray)
+        
+    #     # 将处理后的灰度图转回三通道，以便显示
+    #     enhanced_rgb = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
+
+    #     # numpy array -> QImage -> QPixmap
+    #     h, w, ch = enhanced_rgb.shape
+    #     bytes_per_line = ch * w
+    #     enhanced_qimage = QImage(enhanced_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        
+    #     return QPixmap.fromImage(enhanced_qimage)
+    # # --- END: B3 ---
 
     @staticmethod
     def save_pixmap(pixmap, file_path):

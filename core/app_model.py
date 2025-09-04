@@ -13,7 +13,7 @@ class AppModel(QObject):
     mask_updated = pyqtSignal()
     tool_changed = pyqtSignal(str)
     auto_save_changed = pyqtSignal(bool)
-    high_contrast_changed = pyqtSignal(bool)
+    # high_contrast_changed = pyqtSignal(bool)
 
     zoom_lock_changed = pyqtSignal(bool) # 缩放锁定状态
     
@@ -25,6 +25,8 @@ class AppModel(QObject):
 
     # 底图信号
     image_source_changed = pyqtSignal()
+    effects_changed = pyqtSignal() # 新的信号，通知UI参数改变
+    preview_effects_changed = pyqtSignal() # 预览参数改变信号
 
     def __init__(self, config_path=None):
         super().__init__()
@@ -50,7 +52,20 @@ class AppModel(QObject):
         # 功能状态
         self._selection_tool = "lasso"  
         self._auto_save = False
-        self._high_contrast = False
+        # 废除self._high_contrast = False
+        # 新增: 统一的效果参数字典
+        self._effect_settings = {
+            'manual_enabled': False,
+            'manual_min': 0,
+            'manual_max': 255,
+            'manual_brightness': 0,  # 范围可设为 -100 到 100
+            'manual_contrast': 0,    # 范围可设为 -100 到 100
+
+            'algo_enabled': False,
+            'algo_name': 'clahe',  # 默认算法, 可选 'clahe', 'equalize_hist' 等
+            'clahe_clip_limit': 2.0,
+            'clahe_grid_size': 8
+        }
         self._mask_invert = False
 
         self._is_zoom_locked = False
@@ -65,8 +80,9 @@ class AppModel(QObject):
         # --- END: 核心状态重构 ---
 
         self._show_denoised = False # false显示原图
-        
         self.load_config()
+        # 用于实时预览的临时设置，不影响最终状态和撤销栈
+        self._preview_effect_settings = self._effect_settings.copy()
 
     def load_config(self):
         read_files = self.config.read(self.config_path, encoding='utf-8')
@@ -74,7 +90,7 @@ class AppModel(QObject):
             print(f"警告: 配置文件未找到或为空: {self.config_path}")
         self.config_loaded.emit()
     
-    # --- 栈方法 (无变动) ---
+    # --- 栈方法 ---
     def push_undo_state(self, index, path: QPainterPath):
         if index not in self._undo_stack:
             self._undo_stack[index] = []
@@ -89,7 +105,7 @@ class AppModel(QObject):
             return self._undo_stack[index].pop()
         return None
     
-    # --- 文件与索引 (无变动) ---
+    # --- 文件与索引 ---
     @property
     def current_index(self):
         return self._current_index
@@ -151,14 +167,47 @@ class AppModel(QObject):
             self._auto_save = auto
             self.auto_save_changed.emit(self._auto_save)
             
-    @property
-    def high_contrast(self):
-        return self._high_contrast
+    # @property
+    # def high_contrast(self):
+    #     return self._high_contrast
 
-    def set_high_contrast(self, enabled: bool):
-        if self._high_contrast != enabled:
-            self._high_contrast = enabled
-            self.high_contrast_changed.emit(enabled)
+    # def set_high_contrast(self, enabled: bool):
+    #     if self._high_contrast != enabled:
+    #         self._high_contrast = enabled
+    #         self.high_contrast_changed.emit(enabled)
+
+    @property
+    def effect_settings(self):
+        """获取当前正式的效果设置"""
+        return self._effect_settings
+
+    def update_effect_settings(self, settings: dict):
+        """
+        正式更新效果参数，并触发重绘和撤销记录。
+        """
+        # 在修改前，将当前状态推入撤销栈（这一步在 canvas 中完成）
+        self._effect_settings.update(settings)
+        # 将预览状态与正式状态同步
+        self._preview_effect_settings = self._effect_settings.copy()
+        print("正式应用效果: ", self._effect_settings)
+        self.effects_changed.emit()
+
+    @property
+    def preview_effect_settings(self):
+        """获取用于实时预览的效果设置"""
+        return self._preview_effect_settings
+
+    def update_preview_effect_settings(self, preview_settings: dict):
+        """
+        仅更新预览效果参数，触发实时预览重绘，不影响正式状态。
+        """
+        self._preview_effect_settings.update(preview_settings)
+        self.preview_effects_changed.emit()
+
+    def revert_preview_to_last_settings(self):
+        """当用户取消对话框时，将预览恢复到上一个正式状态"""
+        self._preview_effect_settings = self._effect_settings.copy()
+        self.preview_effects_changed.emit() # 触发一次刷新以清除预览效果
 
     @property
     def mask_invert(self):
@@ -217,3 +266,14 @@ class AppModel(QObject):
         self._last_transform = None
         self._last_h_scroll = 0
         self._last_v_scroll = 0
+
+    # 对比度调整相关
+    # File: /core/app_model.py
+    def update_effect_settings(self, settings: dict):
+        """更新效果参数并通知UI刷新"""
+        self._effect_settings.update(settings)
+        self.effects_changed.emit()
+
+    @property
+    def effect_settings(self):
+        return self._effect_settings

@@ -165,14 +165,15 @@ class ImageCanvas(QGraphicsView):
         self.scene.update()
 
     @pyqtSlot()
-    def update_selection_display(self):
+    def update_selection_display(self, base_pixmap_for_overlay=None):
         self.update_display_pixmap()
         self._selection_item.setPath(QPainterPath())
 
         mode = self.model.display_mode
         if mode == "hide" or not self._original_pixmap: return
 
-        base_pixmap = self._original_item.pixmap()
+        #base_pixmap = self._original_item.pixmap()
+        base_pixmap = base_pixmap_for_overlay if base_pixmap_for_overlay else self._original_item.pixmap()
         if not base_pixmap or base_pixmap.isNull(): return
 
         if mode == "ants":
@@ -363,7 +364,8 @@ class ImageCanvas(QGraphicsView):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(scene_pos, radius, radius)
         painter.end()
-        base_pixmap = self._contrast_pixmap if self.model.high_contrast else self._original_pixmap
+        
+        base_pixmap = self._original_item.pixmap()
         if not base_pixmap: return
         temp_mask_pixmap = QPixmap.fromImage(self._erasing_image)
         preview_pixmap = self.image_manager.create_overlay_pixmap(base_pixmap, temp_mask_pixmap, 'contour', (0,255,0,128), 1, self.model.mask_invert)
@@ -484,10 +486,10 @@ class ImageCanvas(QGraphicsView):
         super().enterEvent(event)
         self.update_cursor()
 
-    @pyqtSlot(bool)
-    def set_high_contrast(self, enabled):
-        self._contrast_pixmap = None  # 切换高对比度时，使缓存失效
-        self.update_selection_display()
+    # @pyqtSlot(bool)
+    # def set_high_contrast(self, enabled):
+    #     self._contrast_pixmap = None  # 切换高对比度时，使缓存失效
+    #     self.update_selection_display()
 
     def update_display_pixmap(self):
         """根据模型状态（原图/去噪/高对比度）更新显示的底图。"""
@@ -496,12 +498,12 @@ class ImageCanvas(QGraphicsView):
         if self.model.show_denoised and self._denoised_pixmap:
             active_base_pixmap = self._denoised_pixmap
 
-        # 2. 如果需要高对比度，则在基础图像上应用效果
-        if self.model.high_contrast:
-            # 如果缓存无效，则重新计算并缓存
-            if not self._contrast_pixmap:
-                self._contrast_pixmap = self.image_manager.apply_clahe(active_base_pixmap)
-            self._original_item.setPixmap(self._contrast_pixmap)
+       # 2. 检查是否有效果需要应用
+        settings = self.model.effect_settings
+        if settings.get('manual_enabled', False) or settings.get('algo_enabled', False):
+            # 应用效果
+            effects_pixmap = self.image_manager.apply_image_effects(active_base_pixmap, settings)
+            self._original_item.setPixmap(effects_pixmap)
         else:
             # 否则直接显示基础图像
             self._original_item.setPixmap(active_base_pixmap)
@@ -560,3 +562,36 @@ class ImageCanvas(QGraphicsView):
             self._selection_path = last_state
             self.model.mask_updated.emit()
             print("Undo successful.")
+    
+    @pyqtSlot()
+    def on_effects_changed(self):
+        """当正式效果参数改变时，刷新画布"""
+        self.update_selection_display()
+
+    @pyqtSlot()
+    def on_preview_effects_changed(self):
+        """当预览效果参数改变时，实时刷新画布"""
+        active_base_pixmap = self._denoised_pixmap if self.model.show_denoised and self._denoised_pixmap else self._original_pixmap
+        if not active_base_pixmap:
+            return
+
+        preview_settings = self.model.preview_effect_settings
+        preview_pixmap = self.image_manager.apply_image_effects(active_base_pixmap, preview_settings)
+
+        # 直接更新显示的pixmap，但不更新缓存
+        self._original_item.setPixmap(preview_pixmap)
+        # 如果有选区，需要重新绘制叠加层
+        self.update_selection_display(base_pixmap_for_overlay=preview_pixmap)
+
+    def push_undo_state_for_effects(self):
+        """为效果更改专门记录撤销状态（待实现）"""
+        # 注意：当前项目的撤销系统是基于 QPainterPath 的，
+        # 要想让效果也能撤销，需要扩展撤销系统来保存 _effect_settings 字典。
+        # 这是一个更复杂的重构，暂时打印一条消息。
+        print("记录效果更改到撤销栈（功能待扩展）")
+
+# 同时需要稍微修改 update_selection_display 接收一个可选参数
+# 找到 def update_selection_display(self):
+# 修改为 def update_selection_display(self, base_pixmap_for_overlay=None):
+# 在该函数内部，找到 base_pixmap = self._original_item.pixmap()
+# 修改为 base_pixmap = base_pixmap_for_overlay if base_pixmap_for_overlay else self._original_item.pixmap()

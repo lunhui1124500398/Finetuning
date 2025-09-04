@@ -17,6 +17,8 @@ from .widgets.image_canvas import ImageCanvas
 from .widgets.preview_panel import PreviewPanel
 from .widgets.progress_slider import ProgressSlider
 from .widgets.settings_dialog import SettingsDialog
+from .widgets.effects_dialog import EffectsDialog
+from PyQt6.QtWidgets import QMessageBox # 确保已导入
 
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -57,7 +59,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V7.2(全新自定义))")
+        self.setWindowTitle("手动抠图工具 V7.4(全新自定义))")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()
@@ -145,6 +147,12 @@ class MainWindow(QMainWindow):
         display_layout.addLayout(auto_save_layout)
         # --- END: 重构 Display Options Group ---
 
+        effects_group = QGroupBox("效果设置")
+        effects_layout = QHBoxLayout(effects_group)
+        self.high_contrast_checkbox = QCheckBox("图像效果调整 (C)") # 按钮文本稍作修改，更明确
+        effects_layout.addWidget(self.high_contrast_checkbox)
+        effects_layout.addStretch() # 让按钮靠左
+
         # --- Edit Tools Group (无变动) ---
         tools_group = QGroupBox("编辑工具")
         tools_layout = QVBoxLayout(tools_group)
@@ -182,6 +190,7 @@ class MainWindow(QMainWindow):
 
         # --- Assemble layout (无变动) ---
         function_layout.addWidget(display_group)
+        function_layout.addWidget(effects_group)
         function_layout.addWidget(tools_group)
         function_layout.addStretch()
         function_layout.addLayout(nav_layout)
@@ -254,7 +263,7 @@ class MainWindow(QMainWindow):
             'import_files': self.import_images,
             'save_and_next': self.save_and_next, # 修正函数名
             'auto_save': lambda: self.model.set_auto_save(not self.model.auto_save),
-            'high_contrast': lambda: self.model.set_high_contrast(not self.model.high_contrast),
+            'high_contrast': self.open_effects_chooser,
             'toggle_image_source': self.model.toggle_image_source
         }
         
@@ -287,7 +296,8 @@ class MainWindow(QMainWindow):
 
         # 连接其他控制选项
         self.auto_save_checkbox.toggled.connect(self.model.set_auto_save)
-        self.high_contrast_checkbox.toggled.connect(self.model.set_high_contrast)
+        # self.high_contrast_checkbox.toggled.connect(self.model.set_high_contrast)
+        self.high_contrast_checkbox.clicked.connect(self.open_effects_chooser)
         self.mask_invert_checkbox.toggled.connect(self.model.set_mask_invert)
         self.lock_zoom_checkbox.toggled.connect(self.model.set_zoom_locked)
 
@@ -298,14 +308,16 @@ class MainWindow(QMainWindow):
         
         # 连接模型状态变化到UI组件
         self.model.auto_save_changed.connect(self.auto_save_checkbox.setChecked)
-        self.model.high_contrast_changed.connect(self.high_contrast_checkbox.setChecked)
+        # self.model.high_contrast_changed.connect(self.high_contrast_checkbox.setChecked)
+        self.model.effects_changed.connect(self.canvas.on_effects_changed)
         self.model.display_mode_changed.connect(self.on_display_mode_changed) # 新信号
         
         self.model.zoom_lock_changed.connect(self.lock_zoom_checkbox.setChecked)
 
         # 连接模型更新到画布
         self.model.mask_updated.connect(self.canvas.update_selection_display)
-        self.model.high_contrast_changed.connect(self.canvas.set_high_contrast)
+        # self.model.high_contrast_changed.connect(self.canvas.set_high_contrast)
+        self.model.preview_effects_changed.connect(self.canvas.on_preview_effects_changed)
         self.model.display_mode_changed.connect(self.canvas.update_selection_display) # 模式改变时也需刷新画布
 
         self.model.image_source_changed.connect(self.canvas.on_image_source_changed)
@@ -462,3 +474,25 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"关闭时保存配置文件失败: {e}")
         super().closeEvent(event)
+    
+    def open_effects_chooser(self):
+        # 如果点击的是复选框，操作后恢复其未选中状态，因为它只是个按钮
+        if self.sender() == self.high_contrast_checkbox:
+            self.high_contrast_checkbox.setChecked(False)
+
+        if self.model.current_index < 0:
+            QMessageBox.warning(self, "提示", "请先加载图像。")
+            return
+
+        # 实例化并显示对话框
+        dialog = EffectsDialog(self.model, self)
+
+        # 连接信号，当对话框点击Apply/OK时，正式更新模型
+        def apply_new_settings(settings):
+            # 应用前，先记录撤销状态
+            self.canvas.push_undo_state_for_effects()
+            self.model.update_effect_settings(settings)
+
+        dialog.settings_applied.connect(apply_new_settings)
+
+        dialog.exec()
