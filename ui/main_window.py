@@ -129,6 +129,10 @@ class MainWindow(QMainWindow):
         other_options_layout = QHBoxLayout()
         self.mask_invert_checkbox = QCheckBox("反相显示")
         self.high_contrast_checkbox = QCheckBox("高对比度 (C)")
+        
+        self.lock_zoom_checkbox = QCheckBox("固定缩放")
+        other_options_layout.addWidget(self.lock_zoom_checkbox)
+
         other_options_layout.addWidget(self.mask_invert_checkbox)
         other_options_layout.addWidget(self.high_contrast_checkbox)
 
@@ -254,8 +258,6 @@ class MainWindow(QMainWindow):
             'toggle_image_source': self.model.toggle_image_source
         }
         
-        # 'polygon_mode' 似乎在原始的ini里没有，可以按需添加
-        # 'toggle_mask' (Z) 已被新的显示模式替代
         
         for key, func in key_map.items():
             create_shortcut(key, func)
@@ -287,7 +289,8 @@ class MainWindow(QMainWindow):
         self.auto_save_checkbox.toggled.connect(self.model.set_auto_save)
         self.high_contrast_checkbox.toggled.connect(self.model.set_high_contrast)
         self.mask_invert_checkbox.toggled.connect(self.model.set_mask_invert)
-        
+        self.lock_zoom_checkbox.toggled.connect(self.model.set_zoom_locked)
+
         # 连接模型信号到UI槽函数
         self.model.index_changed.connect(self.on_index_changed)
         self.model.files_changed.connect(self.on_files_changed)
@@ -298,6 +301,8 @@ class MainWindow(QMainWindow):
         self.model.high_contrast_changed.connect(self.high_contrast_checkbox.setChecked)
         self.model.display_mode_changed.connect(self.on_display_mode_changed) # 新信号
         
+        self.model.zoom_lock_changed.connect(self.lock_zoom_checkbox.setChecked)
+
         # 连接模型更新到画布
         self.model.mask_updated.connect(self.canvas.update_selection_display)
         self.model.high_contrast_changed.connect(self.canvas.set_high_contrast)

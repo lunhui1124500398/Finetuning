@@ -2,7 +2,7 @@
 
 import configparser
 from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtGui import QPainterPath
+from PyQt6.QtGui import QPainterPath, QTransform
 import os
 
 class AppModel(QObject):
@@ -14,6 +14,8 @@ class AppModel(QObject):
     tool_changed = pyqtSignal(str)
     auto_save_changed = pyqtSignal(bool)
     high_contrast_changed = pyqtSignal(bool)
+
+    zoom_lock_changed = pyqtSignal(bool) # 缩放锁定状态
     
     # --- START: 核心状态重构 ---
     # 新增信号，用于通知UI显示模式已改变
@@ -50,6 +52,11 @@ class AppModel(QObject):
         self._auto_save = False
         self._high_contrast = False
         self._mask_invert = False
+
+        self._is_zoom_locked = False
+        self._last_transform = None
+        self._last_h_scroll = 0
+        self._last_v_scroll = 0
 
         # --- START: 核心状态重构 ---
         # 使用单一状态 self._display_mode 替换 self._show_mask 和 self._mask_display_style
@@ -181,3 +188,32 @@ class AppModel(QObject):
         
     def get_keybinding(self, key):
         return self.config['Keybindings'].get(key, '')
+    
+    # 视图显示相关代码
+    @property
+    def is_zoom_locked(self):
+        return self._is_zoom_locked
+
+    def set_zoom_locked(self, locked: bool):
+        if self._is_zoom_locked != locked:
+            self._is_zoom_locked = locked
+            self.zoom_lock_changed.emit(locked)
+            # 如果解锁，则清除已保存的状态
+            if not locked:
+                self.clear_zoom_state()
+    
+    def store_zoom_state(self, transform: QTransform, h_scroll: int, v_scroll: int):
+        """存储视图状态"""
+        self._last_transform = transform
+        self._last_h_scroll = h_scroll
+        self._last_v_scroll = v_scroll
+
+    def get_zoom_state(self):
+        """获取存储的视图状态"""
+        return self._last_transform, self._last_h_scroll, self._last_v_scroll
+
+    def clear_zoom_state(self):
+        """清除存储的视图状态"""
+        self._last_transform = None
+        self._last_h_scroll = 0
+        self._last_v_scroll = 0

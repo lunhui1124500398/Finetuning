@@ -88,8 +88,31 @@ class ImageCanvas(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)
 
+    def capture_view_state(self):
+        """捕获当前的视图变换和滚动条位置，并保存到模型中。"""
+        # 确保场景中有内容可以捕获
+        if self._original_pixmap is None or self._original_pixmap.isNull():
+            return
+        
+        transform = self.transform()
+        h_scroll = self.horizontalScrollBar().value()
+        v_scroll = self.verticalScrollBar().value()
+        self.model.store_zoom_state(transform, h_scroll, v_scroll)
+        
+    @pyqtSlot(bool)
+    def on_zoom_lock_changed(self, locked):
+        """当缩放锁定状态改变时调用"""
+        if not locked:
+            # 当解锁时，将当前视图重置为适应窗口大小
+            if self._original_item and not self._original_item.pixmap().isNull():
+                self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
     @pyqtSlot(int)
     def load_image(self, index):
+        # 在加载新图片之前，如果缩放被锁定，则捕获当前视图的状态
+        if self.model.is_zoom_locked:
+            self.capture_view_state()
+        
         if index < 0:
             self.scene.clear()
             self._original_item = QGraphicsPixmapItem()
@@ -126,7 +149,19 @@ class ImageCanvas(QGraphicsView):
         
         self.update_selection_display()
         self.setSceneRect(self._original_item.boundingRect())
-        self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        if self.model.is_zoom_locked:
+            transform, h_scroll, v_scroll = self.model.get_zoom_state()
+            if transform is not None:
+                self.setTransform(transform)
+                self.horizontalScrollBar().setValue(h_scroll)
+                self.verticalScrollBar().setValue(v_scroll)
+            else:
+                # 如果是第一次在锁定状态下加载图片，则先适应窗口，再捕获状态
+                self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+                self.capture_view_state() 
+        else:
+            # 默认行为：适应窗口
+            self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self.scene.update()
 
     @pyqtSlot()
