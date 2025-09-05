@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V7.4(全新自定义))")
+        self.setWindowTitle("手动抠图工具 V8.1(全新自定义))")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()
@@ -251,6 +251,13 @@ class MainWindow(QMainWindow):
         for key, func in key_map.items():
             create_shortcut(key, func)
 
+    @pyqtSlot(str, str)
+    def _update_model_path(self, key, new_path):
+        """一个专门用来更新模型中路径配置的槽函数"""
+        # 使用 self.model.config.set 来更新内存中的配置
+        self.model.config.set('Paths', key, new_path)
+        print(f"Model path '{key}' updated to: {new_path}")
+
     def _connect_signals(self):
         self.import_button.clicked.connect(self.import_images)
         self.prev_button.clicked.connect(self.model.decrement_index)
@@ -294,6 +301,20 @@ class MainWindow(QMainWindow):
         self.model.image_source_changed.connect(self.canvas.on_image_source_changed)
 
         self.model.mask_updated.connect(lambda: self.preview_panel.update_previews(self.model.current_index))
+        
+        # 当用户通过UI选择新路径时，立即更新AppModel
+        self.original_path_selector.path_selected.connect(
+            lambda path: self._update_model_path('original_path', path)
+        )
+        self.denoised_path_selector.path_selected.connect(
+            lambda path: self._update_model_path('denoised_path', path)
+        )
+        self.mask_path_selector.path_selected.connect(
+            lambda path: self._update_model_path('mask_path', path)
+        )
+        self.save_path_selector.path_selected.connect(
+            lambda path: self._update_model_path('save_path', path)
+        )
 
     @pyqtSlot(str)
     def on_tool_changed(self, tool):
@@ -391,9 +412,32 @@ class MainWindow(QMainWindow):
     def import_images(self):
         original_path = self.original_path_selector.get_path()
         save_path = self.save_path_selector.get_path()
-        if not original_path or not save_path:
-            QMessageBox.warning(self, "路径错误", "请先选择“原图路径”和“保存路径”！")
+
+        # 检查路径是否为空或者目录不存在
+        if not original_path or not os.path.isdir(original_path):
+            QMessageBox.warning(self, "路径错误", "“原图路径”为空或无效，可能是第一次打开没有配置，请继续。")
+            # 可以选择性地弹出文件选择对话框，引导用户操作
+            # self.original_path_selector.select_directory() 
             return
+
+        if not save_path or not os.path.isdir(save_path):
+            # 如果保存路径不存在，可以询问用户是否创建
+            if save_path: # 路径不为空但目录不存在
+                reply = QMessageBox.question(self, "创建目录？", f"路径 “{save_path}” 不存在。\n是否要创建它？",
+                                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                if reply == QMessageBox.StandardButton.Yes:
+                    try:
+                        os.makedirs(save_path, exist_ok=True)
+                    except Exception as e:
+                        QMessageBox.critical(self, "创建失败", f"无法创建目录：{e}")
+                        return
+                else:
+                    QMessageBox.warning(self, "路径错误", "请选择一个有效的“保存路径”！")
+                    return
+            else: # 路径为空
+                QMessageBox.warning(self, "路径错误", "请先选择“保存路径”！")
+                return
+        
         self.model.update_file_lists(
             original_path,  
             self.denoised_path_selector.get_path(),  
