@@ -37,11 +37,14 @@ class ImageManager:
             return pixmap
 
         # 1. 转换 QPixmap -> NumPy Array
-        qimage = pixmap.toImage().convertToFormat(QImage.Format.Format_RGB888)
+        qimage = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
         width, height = qimage.width(), qimage.height()
         ptr = qimage.bits()
         ptr.setsize(qimage.sizeInBytes())
-        arr = np.array(ptr).reshape(height, width, 3).copy() # 使用 .copy() 避免修改原始数据
+        arr_bgra = np.array(ptr).reshape(height, width, 4).copy() # 使用 .copy() 避免修改原始数据
+
+        # 使用OpenCV将BGRA转换为我们需要的RGB格式
+        arr = cv2.cvtColor(arr_bgra, cv2.COLOR_BGRA2RGB)
 
         processed_arr = arr
 
@@ -380,11 +383,16 @@ class ImageManager:
         from PyQt6.QtCore import QRectF # 局部导入以避免循环依赖问题
 
         # 步骤1: 将 QPixmap 转换为 Numpy 数组，以便高效访问像素
-        mask_image = mask_pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
-        
-        ptr = mask_image.bits()
-        ptr.setsize(mask_image.sizeInBytes())
-        arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+        # 先转为32位格式，确保没有行末填充字节
+        mask_image_32bit = mask_pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        height, width = mask_image_32bit.height(), mask_image_32bit.width()
+
+        ptr = mask_image_32bit.bits()
+        ptr.setsize(mask_image_32bit.sizeInBytes())
+        # 从32位图像数据创建4通道NumPy数组 (BGRA)
+        arr_bgra = np.array(ptr).reshape(height, width, 4)
+        # 使用OpenCV将其安全地转换为单通道灰度图
+        arr = cv2.cvtColor(arr_bgra, cv2.COLOR_BGRA2GRAY)
 
         # 步骤2: 使用 Numpy 高效地找出所有亮像素的坐标
         # np.where 会返回两个数组，分别代表满足条件的元素的y坐标和x坐标
