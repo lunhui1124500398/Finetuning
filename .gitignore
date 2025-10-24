@@ -33,7 +33,6 @@ Thumbs.db
 # 8. 其他不需要的文件
 .test_data/
 test_data/
-*.png
 *.jpg
 *.jpeg
 *.gif
