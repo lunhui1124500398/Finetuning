@@ -193,22 +193,27 @@ class MainWindow(QMainWindow):
     def _create_menu(self):
         self.menu_bar = self.menuBar()
         file_menu = self.menu_bar.addMenu("文件(&F)")
-        import_action = QAction("加载/刷新图像 (I)", self)
-        import_action.triggered.connect(self.import_images)
-        file_menu.addAction(import_action)
+
+        self.import_action = QAction("加载/刷新图像 (I)", self)
+        self.import_action.triggered.connect(self.import_images)
+        file_menu.addAction(self.import_action)
+        
         file_menu.addSeparator()
-        exit_action = QAction("退出(&Q)", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        self.exit_action = QAction("退出(&Q)", self)
+        self.exit_action.triggered.connect(self.close)
+        file_menu.addAction(self.exit_action)
+
         edit_menu = self.menu_bar.addMenu("编辑(&E)")
-        undo_action = QAction("撤销", self)
-        undo_action.setShortcut(QKeySequence("Ctrl+Z"))
-        undo_action.triggered.connect(self.canvas.undo)
-        edit_menu.addAction(undo_action)
+        self.undo_action = QAction("撤销", self)
+        self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        self.undo_action.triggered.connect(self.canvas.undo)
+        edit_menu.addAction(self.undo_action)
+        
         view_menu = self.menu_bar.addMenu("视图(&V)")
-        toggle_path_dock_action = self.path_dock_widget.toggleViewAction()
-        toggle_path_dock_action.setText("显示/隐藏路径面板")
-        view_menu.addAction(toggle_path_dock_action)
+        self.toggle_path_dock_action = self.path_dock_widget.toggleViewAction()
+        self.toggle_path_dock_action.setText("显示/隐藏路径面板")
+        view_menu.addAction(self.toggle_path_dock_action)
+        
         view_menu.addSeparator()
         self.restore_layout_action = QAction("恢复默认布局", self)
         self.restore_layout_action.triggered.connect(self.restore_layout)
@@ -245,11 +250,28 @@ class MainWindow(QMainWindow):
             'save_and_next': self.save_and_next,
             'auto_save': lambda: self.model.set_auto_save(not self.model.auto_save),
             'high_contrast': self.open_effects_chooser,
-            'toggle_image_source': self.model.toggle_image_source
+            'toggle_image_source': self.model.toggle_image_source,
+            'toggle_path_panel':self.toggle_path_dock_action.trigger
         }
         
         for key, func in key_map.items():
             create_shortcut(key, func)
+        
+        # 1. 更新“加载/刷新图像”菜单
+        shortcut_str = self.model.get_keybinding('import_files')
+        menu_text = "加载/刷新图像"
+        if shortcut_str:
+            display_shortcut = shortcut_str.split(';')[0].split(',')[0].strip()
+            menu_text += f" ({display_shortcut})"
+        self.import_action.setText(menu_text)
+
+        # 2. 更新“显示/隐藏路径面板”菜单
+        shortcut_str = self.model.get_keybinding('toggle_path_panel')
+        menu_text = "显示/隐藏路径面板"
+        if shortcut_str:
+            display_shortcut = shortcut_str.split(';')[0].split(',')[0].strip()
+            menu_text += f" ({display_shortcut})"
+        self.toggle_path_dock_action.setText(menu_text)
 
     @pyqtSlot(str, str)
     def _update_model_path(self, key, new_path):

@@ -41,9 +41,45 @@ QLineEdit {
     padding: 5px;
 }
 
+QCheckBox {
+    spacing: 5px; /* 勾选框与文字之间的间距 */
+}
+
 QCheckBox::indicator {
     width: 16px;
     height: 16px;
+    border: 2px solid @border-color;     /* 默认边框 */
+    border-radius: 4px;                    /* 圆角 */
+    background-color: @background-color-light; /* 默认背景色 */
+}
+
+QCheckBox::indicator:hover {
+    border: 2px solid @border-color-hover; /* 悬停时边框高亮 */
+}
+
+QCheckBox::indicator:checked {
+    background-color: @text-color;     /* 选中时，用文字颜色填充背景 */
+    border: 2px solid @text-color;     /* 选中时，边框也变为文字颜色 */
+}
+
+QRadioButton {
+    spacing: 5px; /* 指示器和文字之间的距离 */
+}
+
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border: 2px solid @border-color;
+    border-radius: 8px; /* (14px + 2px*2) / 2 = 9px. 保持圆形 */
+    background-color: @background-color-light;
+}
+
+QRadioButton::indicator:hover {
+    border: 2px solid @border-color-hover;
+}
+
+QRadioButton::indicator:checked {
+    background-color: @text-color; /* 选中时用文字颜色填充 */
 }
 
 QSlider::groove:horizontal {

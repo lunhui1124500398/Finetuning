@@ -325,7 +325,8 @@ class SettingsDialog(QDialog):
             'next_image': "D; Right", 'prev_image': "A; Left", 'save': "Ctrl+S",
             'save_and_next': "S", 'draw_mode': "Q", 'erase_mode': "E", 'polygon_mode': "P",
             'clear_mask': "W", 'toggle_mask': "Z", 'auto_save': "X",
-            'high_contrast': "C", 'import_files': "I", 'toggle_image_source': "Space"
+            'high_contrast': "C", 'import_files': "I", 'toggle_image_source': "Space",
+            'toggle_path_panel':"J"
         }
         for key, value in defaults_keys.items():
              if key in self.key_editors:
