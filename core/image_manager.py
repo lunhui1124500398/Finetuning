@@ -41,7 +41,10 @@ class ImageManager:
         width, height = qimage.width(), qimage.height()
         ptr = qimage.bits()
         ptr.setsize(qimage.sizeInBytes())
-        arr = np.array(ptr).reshape(height, width, 3).copy() # 使用 .copy() 避免修改原始数据
+        # --- START: 修复 ---
+        bpl = qimage.bytesPerLine()
+        # 先重塑 (h, bpl)，再切片取 (h, w*3)，最后重塑为 (h, w, 3)
+        arr = np.array(ptr).reshape(height, bpl)[:, :width * 3].reshape(height, width, 3).copy()
 
         processed_arr = arr
 
@@ -147,7 +150,13 @@ class ImageManager:
         
         ptr = mask_image.bits()
         ptr.setsize(mask_image.sizeInBytes())
-        arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+        # arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+        # --- START: 修复 ---
+        h = mask_image.height()
+        w = mask_image.width()
+        bpl = mask_image.bytesPerLine()
+        arr = np.array(ptr).reshape(h, bpl)[:, :w].copy()
+        # --- END: 修复 ---
 
         # 阈值处理，确保是二值图像
         _, binary_arr = cv2.threshold(arr, 127, 255, cv2.THRESH_BINARY)
@@ -251,7 +260,19 @@ class ImageManager:
             ptr = mask_image.bits()
             ptr.setsize(mask_image.sizeInBytes())
             # arr 是单通道灰度图
-            arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+            
+            # [!!!] 这是原始的错误行
+            # arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+
+            # --- START: 修复 ---
+            h = mask_image.height()
+            w = mask_image.width()
+            bpl = mask_image.bytesPerLine() # 获取每行的实际字节数（含padding）
+            
+            # 先重塑为 (h, bpl)，然后切片取 [:, :w]
+            # 必须使用 .copy()，否则 cv2.findContours 可能会出错
+            arr = np.array(ptr).reshape(h, bpl)[:, :w].copy()
+            # --- END: 修复 ---
 
             # 2. 查找轮廓
             contours, hierarchy = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
@@ -296,7 +317,14 @@ class ImageManager:
         qimage = pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
         ptr = qimage.bits()
         ptr.setsize(qimage.sizeInBytes())
-        arr = np.array(ptr).reshape(qimage.height(), qimage.width())
+        # arr = np.array(ptr).reshape(qimage.height(), qimage.width())
+        # --- START: 修复 ---
+        h = qimage.height()
+        w = qimage.width()
+        bpl = qimage.bytesPerLine()
+        arr = np.array(ptr).reshape(h, bpl)[:, :w].copy()
+        # --- END: 修复 ---
+
 
         # 寻找最外层的轮廓
         contours, _ = cv2.findContours(arr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -350,7 +378,13 @@ class ImageManager:
         # 步骤2: 将 QImage 转换为 Numpy 数组，以便 OpenCV 处理
         ptr = mask_image.bits()
         ptr.setsize(mask_image.sizeInBytes())
-        arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+        # arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+        # --- START: 修复 ---
+        h = mask_image.height()
+        w = mask_image.width()
+        bpl = mask_image.bytesPerLine()
+        arr = np.array(ptr).reshape(h, bpl)[:, :w].copy()
+        # --- END: 修复 ---
 
         # 步骤3: 使用 OpenCV 查找轮廓
         # cv2.CHAIN_APPROX_NONE 保证获取边界上的每一个像素点，确保精度
@@ -384,7 +418,13 @@ class ImageManager:
         
         ptr = mask_image.bits()
         ptr.setsize(mask_image.sizeInBytes())
-        arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+        # arr = np.array(ptr).reshape(mask_image.height(), mask_image.width())
+        # --- START: 修复 ---
+        h = mask_image.height()
+        w = mask_image.width()
+        bpl = mask_image.bytesPerLine()
+        arr = np.array(ptr).reshape(h, bpl)[:, :w].copy()
+        # --- END: 修复 ---
 
         # 步骤2: 使用 Numpy 高效地找出所有亮像素的坐标
         # np.where 会返回两个数组，分别代表满足条件的元素的y坐标和x坐标
