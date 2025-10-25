@@ -4,6 +4,7 @@ import configparser
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtGui import QPainterPath, QTransform
 import os
+from utils.helpers import get_base_path
 
 class AppModel(QObject):
     """应用程序的核心数据模型，负责管理所有状态。"""
@@ -34,8 +35,9 @@ class AppModel(QObject):
         super().__init__()
         
         if config_path is None:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(current_dir)
+            # current_dir = os.path.dirname(os.path.abspath(__file__))
+            # project_root = os.path.dirname(current_dir)
+            project_root = get_base_path()
             self.config_path = os.path.join(project_root, 'config', 'settings.ini')
         else:
             self.config_path = config_path

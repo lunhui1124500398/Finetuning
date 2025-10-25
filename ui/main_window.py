@@ -19,6 +19,7 @@ from .widgets.progress_slider import ProgressSlider
 from .widgets.settings_dialog import SettingsDialog
 from .widgets.effects_dialog import EffectsDialog
 from PyQt6.QtWidgets import QMessageBox # 确保已导入
+from utils.helpers import get_base_path
 
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -50,8 +51,10 @@ class MainWindow(QMainWindow):
 
     def set_application_icon(self):
         """加载并设置应用程序的图标。"""
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(script_dir, 'resources', 'icons', 'app_icon.png')
+        # script_dir = os.path.dirname(os.path.abspath(__file__))
+        # icon_path = os.path.join(script_dir, 'resources', 'icons', 'app_icon.png')
+        base_path = get_base_path()
+        icon_path = os.path.join(base_path, 'ui', 'resources', 'icons', 'app_icon.png')
 
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
