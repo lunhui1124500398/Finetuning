@@ -25,6 +25,7 @@ class AppModel(QObject):
 
     # 底图信号
     image_source_changed = pyqtSignal()
+    mask_source_changed = pyqtSignal(bool) #新增：用于切换mask
     effects_changed = pyqtSignal() # 新的信号，通知UI参数改变
     preview_effects_changed = pyqtSignal() # 预览参数改变信号
 
@@ -80,6 +81,9 @@ class AppModel(QObject):
         # --- END: 核心状态重构 ---
 
         self._show_denoised = False # false显示原图
+        # 默认优先加载已经保存的mask
+        self._load_from_save_path = True
+
         self.load_config()
         # 用于实时预览的临时设置，不影响最终状态和撤销栈
         self._preview_effect_settings = self._effect_settings.copy()
@@ -231,6 +235,24 @@ class AppModel(QObject):
             self._show_denoised = not self._show_denoised
             print(f"切换底图，当前显示去噪图: {self._show_denoised}")
             self.image_source_changed.emit()
+    
+    @property
+    def load_from_save_path(self):
+        """
+        返回是否应该优先从save_path加载mask
+        """
+        return self._load_from_save_path
+    
+    def toggle_mask_source(self):
+        """
+        切换mask的加载源。
+        True:优先加载save_path
+        False:优先加载mask_path
+        """
+        self._load_from_save_path = not self._load_from_save_path
+        source = "'Save Path' (已存效果)" if self._load_from_save_path else "'Mask Path' (二值化图)"
+        print(f"Mask 加载源已切换，优先加载: {source}")
+        self.mask_source_changed.emit(self._load_from_save_path)
 
     def get_path(self, key):
         return self.config['Paths'].get(key)

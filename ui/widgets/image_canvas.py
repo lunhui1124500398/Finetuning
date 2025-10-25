@@ -140,9 +140,42 @@ class ImageCanvas(QGraphicsView):
         
         self.update_display_pixmap()
 
+        self._selection_path = QPainterPath()
         mask_pixmap = None
+
+        # 1. 获取 'save_path' (已存效果) 的路径
+        save_dir = self.model.get_path('save_path')
+        saved_mask_path = None
+        if save_dir and index >= 0:
+            original_filename = os.path.basename(self.model._original_files[index])
+            mask_filename = os.path.splitext(original_filename)[0] + '.png'
+            saved_mask_path = os.path.join(save_dir, mask_filename)
+        # 2. 获取 'mask_path' (二值化图) 的路径
+        binary_mask_path = None
         if self.model._mask_files and index < len(self.model._mask_files):
-            mask_pixmap = self.image_manager.load_pixmap(self.model._mask_files[index])
+            binary_mask_path = self.model._mask_files[index]
+        # 3. 根据 model 中的状态决定加载哪个
+        path_to_load = None
+        if self.model.load_from_save_path:
+            # 优先加载 'save_path' (已存效果)
+            if saved_mask_path and os.path.exists(saved_mask_path):
+                path_to_load = saved_mask_path
+            elif binary_mask_path:
+                path_to_load = binary_mask_path # 回退
+        else:
+            # 优先加载 'mask_path' (二值化图)
+            if binary_mask_path:
+                path_to_load = binary_mask_path
+            elif saved_mask_path and os.path.exists(saved_mask_path):
+                path_to_load = saved_mask_path # 回退
+
+        if path_to_load:
+            mask_pixmap = self.image_manager.load_pixmap(path_to_load)
+            # print(f"Loaded mask from: {path_to_load}")
+
+
+        # if self.model._mask_files and index < len(self.model._mask_files):
+        #     mask_pixmap = self.image_manager.load_pixmap(self.model._mask_files[index])
         
         if mask_pixmap and not mask_pixmap.isNull():
             self._selection_path = self.image_manager.create_path_from_mask(mask_pixmap)

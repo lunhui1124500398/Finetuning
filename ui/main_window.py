@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V8.1(全新自定义))")
+        self.setWindowTitle("手动抠图工具 V8.5(全新自定义))")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()
@@ -126,8 +126,16 @@ class MainWindow(QMainWindow):
         self.mask_invert_checkbox = QCheckBox("反相显示")
         
         self.lock_zoom_checkbox = QCheckBox("固定缩放")
+        # --- START: 1. 新增 Mask 来源标签 ---
+        # 默认文本会在加载文件时设置
+        self.mask_source_label = QLabel("来源: N/A")
+        self.mask_source_label.setObjectName("MaskSourceLabel")
+        self.mask_source_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        
         other_options_layout.addWidget(self.lock_zoom_checkbox)
         other_options_layout.addWidget(self.mask_invert_checkbox)
+        other_options_layout.addStretch() #将标签推到右侧
+        other_options_layout.addWidget(self.mask_source_label)
 
         auto_save_layout = QHBoxLayout()
         self.auto_save_checkbox = QCheckBox("自动保存 (X)")
@@ -161,9 +169,13 @@ class MainWindow(QMainWindow):
         tool_buttons_layout.addWidget(self.polygon_button)
         tool_buttons_layout.addWidget(self.erase_selection_button)
         action_buttons_layout = QVBoxLayout()
+        
+        self.toggle_mask_source_button = QPushButton("切换Mask来源 (T)")
         self.clear_button = QPushButton("清除Mask (W)")
         self.save_button = QPushButton("保存 (Ctrl+S)")
         self.save_and_next_button = QPushButton("保存并下一张 (S or 双击)")
+        
+        action_buttons_layout.addWidget(self.toggle_mask_source_button)
         action_buttons_layout.addWidget(self.clear_button)
         action_buttons_layout.addWidget(self.save_button)
         action_buttons_layout.addWidget(self.save_and_next_button)
@@ -251,7 +263,8 @@ class MainWindow(QMainWindow):
             'auto_save': lambda: self.model.set_auto_save(not self.model.auto_save),
             'high_contrast': self.open_effects_chooser,
             'toggle_image_source': self.model.toggle_image_source,
-            'toggle_path_panel':self.toggle_path_dock_action.trigger
+            'toggle_path_panel':self.toggle_path_dock_action.trigger,
+            'toggle_mask_source':self.model.toggle_mask_source
         }
         
         for key, func in key_map.items():
@@ -289,6 +302,8 @@ class MainWindow(QMainWindow):
         self.clear_button.clicked.connect(self.canvas.clear_current_selection)
         self.save_button.clicked.connect(self.canvas.save_current_mask)
         self.save_and_next_button.clicked.connect(self.save_and_next)
+
+        self.toggle_mask_source_button.clicked.connect(self.model.toggle_mask_source)
         
         self.canvas.save_and_next_requested.connect(self.save_and_next)
 
@@ -320,8 +335,14 @@ class MainWindow(QMainWindow):
         self.model.preview_effects_changed.connect(self.canvas.on_preview_effects_changed)
         self.model.display_mode_changed.connect(self.canvas.update_selection_display)
 
-        self.model.image_source_changed.connect(self.canvas.on_image_source_changed)
+        # 新增：当Mask加载源切换时，强制重载当前图像
+        self.model.mask_source_changed.connect(
+            lambda:self.canvas.load_image(self.model.current_index)
+            )
+        # 更换加载源时，更新标签文本
+        self.model.mask_source_changed.connect(self.update_mask_source_label)
 
+        self.model.image_source_changed.connect(self.canvas.on_image_source_changed)
         self.model.mask_updated.connect(lambda: self.preview_panel.update_previews(self.model.current_index))
         
         # 当用户通过UI选择新路径时，立即更新AppModel
@@ -374,12 +395,25 @@ class MainWindow(QMainWindow):
         if total_files > 0:
             self.progress_slider.set_range(0, total_files - 1)
             self.on_display_mode_changed(self.model.display_mode)
+            self.update_mask_source_label(self.model.load_from_save_path) #首次加载时设置标签初始状态
             self.on_index_changed(self.model.current_index)
         else:
             self.progress_slider.set_range(0, -1)
             self.preview_panel.clear_previews()
             self.canvas.load_image(-1)
+            self.mask_source_label.setText("来源: N/A") # 清空标签
             QMessageBox.information(self, "提示", "在指定路径下未找到图像文件。")
+    
+    # --- START: 新增槽函数 ---
+    @pyqtSlot(bool)
+    def update_mask_source_label(self, load_from_save):
+        """仅更新Mask来源标签的文本"""
+        if load_from_save:
+            self.mask_source_label.setText("来源: 已存 (Save)")
+            self.mask_source_label.setToolTip("当前优先加载 'Save Path' (按 T 键切换)")
+        else:
+            self.mask_source_label.setText("来源: 二值 (Mask)")
+            self.mask_source_label.setToolTip("当前优先加载 'Mask Path' (按 T 键切换)")
     
     def save_and_next(self):
         if self.model.current_index < 0:
