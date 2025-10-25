@@ -245,6 +245,10 @@ class ImageCanvas(QGraphicsView):
             self.scene.update(self._selection_item.boundingRect())
 
     def wheelEvent(self, event):
+        # 如果模型被设置为 "固定缩放"，则忽略所有滚轮事件（包括双指缩放）
+        if self.model.is_zoom_locked:
+            event.accept() # 消耗掉这个事件，防止父类处理
+            return
         zoom_factor = 1.25 if event.angleDelta().y() > 0 else 1 / 1.25
         self.scale(zoom_factor, zoom_factor)
 
