@@ -184,14 +184,20 @@ class MainWindow(QMainWindow):
         tool_buttons_layout.addWidget(self.erase_selection_button)
         
         # --- START: 新增橡皮擦大小滑块 ---
-        eraser_size_layout = QHBoxLayout()
+        tool_options_layout = QHBoxLayout()
+        # eraser_size_layout = QHBoxLayout()
         self.eraser_size_label = QLabel(f"橡皮擦: {self.model.eraser_size}px")
         self.eraser_size_label.setMinimumWidth(80) # 防止标签跳动
         self.eraser_size_slider = QSlider(Qt.Orientation.Horizontal)
         self.eraser_size_slider.setRange(1, 200) # 设置橡皮擦大小范围
         self.eraser_size_slider.setValue(self.model.eraser_size)
-        eraser_size_layout.addWidget(self.eraser_size_label)
-        eraser_size_layout.addWidget(self.eraser_size_slider)
+        tool_options_layout.addWidget(self.eraser_size_label)
+        tool_options_layout.addWidget(self.eraser_size_slider)
+        tool_options_layout.addSpacing(20) # 添加一点间距
+        # 新增的 "添加模式" 复选框
+        self.selection_add_mode_checkbox = QCheckBox("添加模式")
+        self.selection_add_mode_checkbox.setToolTip("勾选后，套索和多边形工具将默认用于添加选区（无需按Shift）")
+        tool_options_layout.addWidget(self.selection_add_mode_checkbox)
 
         
         action_buttons_layout = QVBoxLayout()
@@ -206,7 +212,7 @@ class MainWindow(QMainWindow):
         action_buttons_layout.addWidget(self.save_button)
         action_buttons_layout.addWidget(self.save_and_next_button)
         tools_layout.addLayout(tool_buttons_layout)
-        tools_layout.addLayout(eraser_size_layout) # 将滑块工具添加到工具布局中
+        tools_layout.addLayout(tool_options_layout) # 将滑块工具添加到工具布局中
         tools_layout.addLayout(action_buttons_layout)
 
         nav_layout = QHBoxLayout()
@@ -343,6 +349,8 @@ class MainWindow(QMainWindow):
         # --- START: 连接橡皮擦滑块 ---
         self.eraser_size_slider.valueChanged.connect(self.model.set_eraser_size)
         self.model.eraser_size_changed.connect(self.on_eraser_size_changed)
+        self.selection_add_mode_checkbox.toggled.connect(self.model.set_selection_add_mode)
+        self.model.selection_add_mode_changed.connect(self.selection_add_mode_checkbox.setChecked)
 
         self.hide_radio.toggled.connect(lambda checked: self.model.set_display_mode("hide") if checked else None)
         self.area_radio.toggled.connect(lambda checked: self.model.set_display_mode("area") if checked else None)

@@ -353,9 +353,17 @@ class ImageCanvas(QGraphicsView):
         if modifiers in [Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.ControlModifier]: 
             return 'subtract'
         
-        # 2. 如果没有按键，检查当前选择的工具
+        # 2. 如果没有按键，检查工具和全局模式
+   
+        # 2a. 检查是否正在使用 "减去" 工具
         if self._current_tool in ["lasso_subtract", "polygon_subtract"]:
             return 'subtract'
+    
+        # 2b. 检查是否开启了 "添加模式" (来自平板用户的需求)
+        if self.model.selection_add_mode:
+            # 如果 "添加模式" 开启，则 "lasso" 和 "polygon" 工具的默认行为是 'add'
+            if self._current_tool in ["lasso", "polygon"]:
+                return 'add'
             
         # 3. 默认是 'new' (套索+ 或 多边形+)
         # (Shift键会将其变为 'add', 已在第1步处理)

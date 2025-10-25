@@ -15,6 +15,7 @@ class AppModel(QObject):
     tool_changed = pyqtSignal(str)
     auto_save_changed = pyqtSignal(bool)
     eraser_size_changed = pyqtSignal(int) #新增：橡皮擦大小
+    selection_add_mode_changed = pyqtSignal(bool)
     # high_contrast_changed = pyqtSignal(bool)
 
     zoom_lock_changed = pyqtSignal(bool) # 缩放锁定状态
@@ -57,6 +58,7 @@ class AppModel(QObject):
         self._selection_tool = "lasso"  
         self._auto_save = False
         self._eraser_size = 10 # 默认值
+        self._selection_add_mode = False
         # 废除self._high_contrast = False
         # 新增: 统一的效果参数字典
         self._effect_settings = {
@@ -155,6 +157,15 @@ class AppModel(QObject):
         if tool in valid_tools and self._selection_tool != tool:
             self._selection_tool = tool
             self.tool_changed.emit(tool)
+    
+    @property
+    def selection_add_mode(self):
+        return self._selection_add_mode
+    
+    def set_selection_add_mode(self, enabled: bool):
+        if self._selection_add_mode != enabled:
+            self._selection_add_mode = enabled
+            self.selection_add_mode_changed.emit(enabled)
     
     # --- START: 核心状态重构 ---
     @property
