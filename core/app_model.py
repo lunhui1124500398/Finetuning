@@ -13,6 +13,7 @@ class AppModel(QObject):
     mask_updated = pyqtSignal()
     tool_changed = pyqtSignal(str)
     auto_save_changed = pyqtSignal(bool)
+    eraser_size_changed = pyqtSignal(int) #新增：橡皮擦大小
     # high_contrast_changed = pyqtSignal(bool)
 
     zoom_lock_changed = pyqtSignal(bool) # 缩放锁定状态
@@ -53,6 +54,7 @@ class AppModel(QObject):
         # 功能状态
         self._selection_tool = "lasso"  
         self._auto_save = False
+        self._eraser_size = 10 # 默认值
         # 废除self._high_contrast = False
         # 新增: 统一的效果参数字典
         self._effect_settings = {
@@ -93,6 +95,8 @@ class AppModel(QObject):
         if not read_files:
             print(f"警告: 配置文件未找到或为空: {self.config_path}")
         self.config_loaded.emit()
+        # 从配置文件初始化橡皮擦大小
+        self._eraser_size = self.config.getint("Drawing", 'eraser_size', fallback=10)
     
     # --- 栈方法 ---
     def push_undo_state(self, index, path: QPainterPath):
@@ -170,6 +174,17 @@ class AppModel(QObject):
         if self._auto_save != auto:
             self._auto_save = auto
             self.auto_save_changed.emit(self._auto_save)
+    
+    @property
+    def eraser_size(self):
+        return self._eraser_size
+
+    def set_eraser_size(self, size: int):
+        """设置橡皮擦大小并发出信号"""
+        size = max(1, min(size, 200)) # 限制大小在 1-200
+        if self._eraser_size != size:
+            self._eraser_size = size
+            self.eraser_size_changed.emit(size)
             
     # @property
     # def high_contrast(self):

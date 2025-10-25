@@ -5,7 +5,7 @@ import sys
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QCheckBox, QFrame, QSplitter, QMessageBox, QDockWidget,
-    QButtonGroup, QRadioButton, QLabel, QGroupBox, QDialog
+    QButtonGroup, QRadioButton, QLabel, QGroupBox, QDialog, QSlider
 )
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence, QIcon
@@ -168,6 +168,17 @@ class MainWindow(QMainWindow):
         tool_buttons_layout.addWidget(self.lasso_button)
         tool_buttons_layout.addWidget(self.polygon_button)
         tool_buttons_layout.addWidget(self.erase_selection_button)
+        # --- START: 新增橡皮擦大小滑块 ---
+        eraser_size_layout = QHBoxLayout()
+        self.eraser_size_label = QLabel(f"橡皮擦: {self.model.eraser_size}px")
+        self.eraser_size_label.setMinimumWidth(80) # 防止标签跳动
+        self.eraser_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.eraser_size_slider.setRange(1, 200) # 设置橡皮擦大小范围
+        self.eraser_size_slider.setValue(self.model.eraser_size)
+        eraser_size_layout.addWidget(self.eraser_size_label)
+        eraser_size_layout.addWidget(self.eraser_size_slider)
+
+        
         action_buttons_layout = QVBoxLayout()
         
         self.toggle_mask_source_button = QPushButton("切换Mask来源 (T)")
@@ -180,6 +191,7 @@ class MainWindow(QMainWindow):
         action_buttons_layout.addWidget(self.save_button)
         action_buttons_layout.addWidget(self.save_and_next_button)
         tools_layout.addLayout(tool_buttons_layout)
+        tools_layout.addLayout(eraser_size_layout) # 将滑块工具添加到工具布局中
         tools_layout.addLayout(action_buttons_layout)
 
         nav_layout = QHBoxLayout()
@@ -311,6 +323,10 @@ class MainWindow(QMainWindow):
         self.polygon_button.toggled.connect(lambda checked: self.model.set_selection_tool("polygon") if checked else None)
         self.erase_selection_button.toggled.connect(lambda checked: self.model.set_selection_tool("erase") if checked else None)
         
+        # --- START: 连接橡皮擦滑块 ---
+        self.eraser_size_slider.valueChanged.connect(self.model.set_eraser_size)
+        self.model.eraser_size_changed.connect(self.on_eraser_size_changed)
+
         self.hide_radio.toggled.connect(lambda checked: self.model.set_display_mode("hide") if checked else None)
         self.area_radio.toggled.connect(lambda checked: self.model.set_display_mode("area") if checked else None)
         self.contour_radio.toggled.connect(lambda checked: self.model.set_display_mode("contour") if checked else None)
@@ -358,6 +374,17 @@ class MainWindow(QMainWindow):
         self.save_path_selector.path_selected.connect(
             lambda path: self._update_model_path('save_path', path)
         )
+
+    # --- START: 新增橡皮擦滑块的槽函数 ---
+    @pyqtSlot(int)
+    def on_eraser_size_changed(self, size):
+        # 更新标签
+        self.eraser_size_label.setText(f"橡皮擦: {size}px")
+        # 更新滑块位置（防止循环触发，先阻断信号）
+        self.eraser_size_slider.blockSignals(True)
+        self.eraser_size_slider.setValue(size)
+        self.eraser_size_slider.blockSignals(False)
+
 
     @pyqtSlot(str)
     def on_tool_changed(self, tool):

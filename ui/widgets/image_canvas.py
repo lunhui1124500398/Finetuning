@@ -392,7 +392,8 @@ class ImageCanvas(QGraphicsView):
 
     def _apply_eraser(self, scene_pos: QPointF):
         if self._erasing_image is None: return
-        size = self.model.config['Drawing'].getint('eraser_size', 10)
+        # size = self.model.config['Drawing'].getint('eraser_size', 10)
+        size = self.model.eraser_size
         radius = size / 2.0
         painter = QPainter(self._erasing_image)
         painter.setBrush(Qt.GlobalColor.black)
@@ -483,7 +484,8 @@ class ImageCanvas(QGraphicsView):
             painter.drawPath(self._selection_path)
 
         if self._current_tool == 'erase' and self.underMouse() and not self._is_panning:
-            size = self.model.config['Drawing'].getint('eraser_size', 10)
+            # size = self.model.config['Drawing'].getint('eraser_size', 10)
+            size = self.model.eraser_size
             radius = size / 2.0
             pos = self.mapToScene(self.mapFromGlobal(QCursor.pos()))
             painter.setPen(QPen(Qt.GlobalColor.white, pen_width))
