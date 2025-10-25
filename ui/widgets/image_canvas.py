@@ -382,6 +382,11 @@ class ImageCanvas(QGraphicsView):
                         else:
                             self._selection_path = final_path
                 self.model.mask_updated.emit()
+
+                # 加入自动保存逻辑
+                if self.model.auto_save:
+                    self.save_current_mask()
+            
         finally:
             if self._mode_before_drawing is not None:
                 self.model.set_display_mode(self._mode_before_drawing)
@@ -422,6 +427,11 @@ class ImageCanvas(QGraphicsView):
                 self._selection_path = new_path
 
             self.model.mask_updated.emit()
+            
+            # 自动保存
+            if self.model.auto_save:
+                self.save_current_mask()
+
         finally:
             if self._mode_before_drawing is not None:
                 self.model.set_display_mode(self._mode_before_drawing)
@@ -598,6 +608,11 @@ class ImageCanvas(QGraphicsView):
         if last_state is not None:
             self._selection_path = last_state
             self.model.mask_updated.emit()
+
+            # 自动保存
+            if self.model.auto_save:
+                self.save_current_mask()
+
             print("Undo successful.")
     
     @pyqtSlot()
