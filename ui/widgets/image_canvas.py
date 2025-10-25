@@ -266,8 +266,16 @@ class ImageCanvas(QGraphicsView):
                 self._cancel_drawing()
                 event.accept()
                 return
-            super().mousePressEvent(event)
-            return
+            else:
+                # 检查是否有图像加载
+                if self.model.current_index >= 0:
+                    print("Right-click (Stylus side button) captured for Save and Next.")
+                    self.save_and_next_requested.emit()
+                
+                event.accept()
+                return
+            # super().mousePressEvent(event)
+            # return
 
         if event.button() == Qt.MouseButton.MiddleButton:
             self._is_panning = True
