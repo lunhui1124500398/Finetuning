@@ -289,10 +289,10 @@ class ImageCanvas(QGraphicsView):
         self._is_drawing_selection = True
         scene_pos = self.mapToScene(event.pos())
 
-        if self._current_tool in ['lasso', 'polygon']:
-            if self._current_tool == 'lasso':
+        if self._current_tool in ['lasso', 'polygon', 'lasso_subtract', 'polygon_subtract']:
+            if self._current_tool == 'lasso' or self._current_tool == 'lasso_subtract':
                 self._temp_drawing_points = [scene_pos]
-            elif self._current_tool == 'polygon':
+            elif self._current_tool == 'polygon' or self._current_tool == 'polygon_subtract':
                 if len(self._temp_drawing_points) > 1 and \
                    (scene_pos - self._temp_drawing_points[0]).manhattanLength() < 15 / self.transform().m11():
                     self._end_drawing(commit_selection=True)
@@ -319,7 +319,7 @@ class ImageCanvas(QGraphicsView):
             return
         
         if self._is_drawing_selection:
-            if self._current_tool == 'lasso':
+            if self._current_tool == 'lasso' or self._current_tool == 'lasso_subtract':
                 self._temp_drawing_points.append(scene_pos)
             elif self._current_tool == 'erase':
                 self._apply_eraser(scene_pos)
@@ -335,8 +335,8 @@ class ImageCanvas(QGraphicsView):
             return
 
         if self._is_drawing_selection:
-            if self._current_tool in ['lasso', 'polygon']:
-                if self._current_tool == 'lasso':
+            if self._current_tool in ['lasso', 'polygon','lasso_subtract', 'polygon_subtract']:
+                if self._current_tool == 'lasso' or self._current_tool == 'lasso_subtract':
                     self._end_drawing(commit_selection=True)
             elif self._current_tool == 'erase':
                 self._end_erasing()
@@ -345,13 +345,25 @@ class ImageCanvas(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def _get_current_modifier(self):
+        # --- START: 重写此方法 ---
         modifiers = QApplication.keyboardModifiers()
-        if modifiers == Qt.KeyboardModifier.ShiftModifier: return 'add'
-        elif modifiers in [Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.ControlModifier]: return 'subtract'
+        # 1. 键盘快捷键优先
+        if modifiers == Qt.KeyboardModifier.ShiftModifier: 
+            return 'add'
+        if modifiers in [Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.ControlModifier]: 
+            return 'subtract'
+        
+        # 2. 如果没有按键，检查当前选择的工具
+        if self._current_tool in ["lasso_subtract", "polygon_subtract"]:
+            return 'subtract'
+            
+        # 3. 默认是 'new' (套索+ 或 多边形+)
+        # (Shift键会将其变为 'add', 已在第1步处理)
         return 'new'
+        # --- END: 重写此方法 ---
 
     def _end_drawing(self, commit_selection=True):
-        if not self._is_drawing_selection or self._current_tool not in ['lasso', 'polygon']:
+        if not self._is_drawing_selection or self._current_tool not in ['lasso', 'polygon','lasso_subtract', 'polygon_subtract']:
             if self._current_tool != 'erase':
                  self._is_drawing_selection = False
             return
@@ -467,13 +479,13 @@ class ImageCanvas(QGraphicsView):
         current_scale = self.transform().m11()
         pen_width = 1.0 / current_scale
 
-        if self._is_drawing_selection and self._current_tool in ['lasso', 'polygon'] and self._temp_drawing_points:
+        if self._is_drawing_selection and self._current_tool in ['lasso', 'polygon', 'lasso_subtract', 'polygon_subtract'] and self._temp_drawing_points:
             pen = QPen(Qt.GlobalColor.cyan, pen_width, Qt.PenStyle.DotLine)
             painter.setPen(pen)
             points_f = self._temp_drawing_points
             if len(points_f) > 1:
                 painter.drawPolyline(QPolygonF(points_f))
-            if self._current_tool == 'polygon' and self.underMouse():
+            if self._current_tool == 'polygon' or self._current_tool == 'polygon_subtract' and self.underMouse():
                 mouse_pos = self.mapToScene(self.mapFromGlobal(QCursor.pos()))
                 painter.drawLine(points_f[-1], mouse_pos)
         
@@ -564,7 +576,7 @@ class ImageCanvas(QGraphicsView):
     @pyqtSlot(str)
     def set_tool(self, tool):
         if self._is_drawing_selection:
-            if self._current_tool in ['lasso', 'polygon']:
+            if self._current_tool in ['lasso', 'polygon', 'lasso_subtract', 'polygon_subtract']:
                 self._cancel_drawing() # 切换工具时取消当前绘制
             elif self._current_tool == 'erase':
                 self._end_erasing()

@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V8.6(全新自定义))")
+        self.setWindowTitle("手动抠图工具 V8.8(全新自定义))")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()
@@ -154,20 +154,32 @@ class MainWindow(QMainWindow):
         tools_group = QGroupBox("编辑工具")
         tools_layout = QVBoxLayout(tools_group)
         tool_buttons_layout = QHBoxLayout()
-        self.lasso_button = QPushButton("套索 (Q)")
-        self.polygon_button = QPushButton("多边形 (P)")
+        self.lasso_button = QPushButton("套索 (+/Q)")
+        self.lasso_subtract_button = QPushButton("套索 (-)")
+        self.polygon_button = QPushButton("多边形 (+/P)")
+        self.polygon_subtract_button = QPushButton("多边形 (-)")
         self.erase_selection_button = QPushButton("橡皮擦(E)")
+
         self.lasso_button.setCheckable(True)
+        self.lasso_subtract_button.setCheckable(True)
         self.polygon_button.setCheckable(True)
+        self.polygon_subtract_button.setCheckable(True)
         self.erase_selection_button.setCheckable(True)
+
         self.tool_button_group = QButtonGroup(self)
         self.tool_button_group.addButton(self.lasso_button)
+        self.tool_button_group.addButton(self.lasso_subtract_button)
         self.tool_button_group.addButton(self.polygon_button)
+        self.tool_button_group.addButton(self.polygon_subtract_button)
         self.tool_button_group.addButton(self.erase_selection_button)
+
         self.lasso_button.setChecked(True)
         tool_buttons_layout.addWidget(self.lasso_button)
+        tool_buttons_layout.addWidget(self.lasso_subtract_button)
         tool_buttons_layout.addWidget(self.polygon_button)
+        tool_buttons_layout.addWidget(self.polygon_subtract_button)
         tool_buttons_layout.addWidget(self.erase_selection_button)
+        
         # --- START: 新增橡皮擦大小滑块 ---
         eraser_size_layout = QHBoxLayout()
         self.eraser_size_label = QLabel(f"橡皮擦: {self.model.eraser_size}px")
@@ -320,7 +332,9 @@ class MainWindow(QMainWindow):
         self.canvas.save_and_next_requested.connect(self.save_and_next)
 
         self.lasso_button.toggled.connect(lambda checked: self.model.set_selection_tool("lasso") if checked else None)
+        self.lasso_subtract_button.toggled.connect(lambda checked: self.model.set_selection_tool("lasso_subtract") if checked else None)
         self.polygon_button.toggled.connect(lambda checked: self.model.set_selection_tool("polygon") if checked else None)
+        self.polygon_subtract_button.toggled.connect(lambda checked: self.model.set_selection_tool("polygon_subtract") if checked else None)
         self.erase_selection_button.toggled.connect(lambda checked: self.model.set_selection_tool("erase") if checked else None)
         
         # --- START: 连接橡皮擦滑块 ---
@@ -395,6 +409,10 @@ class MainWindow(QMainWindow):
             self.polygon_button.setChecked(True)
         elif tool == 'erase':
             self.erase_selection_button.setChecked(True)
+        elif tool == 'lasso_subtract':
+            self.lasso_subtract_button.setChecked(True)
+        elif tool == 'polygon_subtract':
+            self.polygon_subtract_button.setChecked(True)
 
     @pyqtSlot(str)
     def on_display_mode_changed(self, mode):

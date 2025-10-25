@@ -149,7 +149,8 @@ class AppModel(QObject):
         return self._selection_tool
 
     def set_selection_tool(self, tool):
-        if tool in ["lasso", "polygon", "erase"] and self._selection_tool != tool:
+        valid_tools = ["lasso", "polygon", "erase", "lasso_subtract", "polygon_subtract"]
+        if tool in valid_tools and self._selection_tool != tool:
             self._selection_tool = tool
             self.tool_changed.emit(tool)
     
