@@ -11,7 +11,7 @@ __pycache__/
 # 3. 打包和构建的产物
 dist/
 build/
-*.spec
+# *.spec
 
 # 4. IDE/编辑器的配置文件
 .vscode/

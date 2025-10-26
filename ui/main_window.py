@@ -5,7 +5,7 @@ import sys
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QCheckBox, QFrame, QSplitter, QMessageBox, QDockWidget,
-    QButtonGroup, QRadioButton, QLabel, QGroupBox, QDialog, QSlider
+    QButtonGroup, QRadioButton, QLabel, QGroupBox, QDialog, QSlider, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence, QIcon
@@ -63,7 +63,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V8.8(全新自定义))")
+        self.setWindowTitle("手动抠图工具 V9.1(全新自定义))")
         self.setGeometry(100, 100, 1800, 1000)
 
         central_widget = QWidget()
@@ -140,12 +140,26 @@ class MainWindow(QMainWindow):
         other_options_layout.addStretch() #将标签推到右侧
         other_options_layout.addWidget(self.mask_source_label)
 
+        self.filename_display_layout = QHBoxLayout()
+        self.filename_label_title = QLabel("当前文件:")
+        self.filename_label_value = QLabel("N/A")
+        
+        # 策略：让value-label水平扩展，并将其内部文本推到右侧
+        # QLabel 默认会使用 ElideRight (末尾...) 来处理溢出文本
+        self.filename_label_value.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.filename_label_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.filename_label_value.setToolTip("当前正在编辑的图像文件名")
+        
+        self.filename_display_layout.addWidget(self.filename_label_title)
+        self.filename_display_layout.addWidget(self.filename_label_value)
+
         auto_save_layout = QHBoxLayout()
         self.auto_save_checkbox = QCheckBox("自动保存 (X)")
         auto_save_layout.addWidget(self.auto_save_checkbox)
 
         display_layout.addLayout(display_mode_layout)
         display_layout.addLayout(other_options_layout)
+        display_layout.addLayout(self.filename_display_layout)
         display_layout.addLayout(auto_save_layout)
 
         effects_group = QGroupBox("效果设置")
@@ -438,11 +452,31 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(int)
     def on_index_changed(self, index):
-        if index < 0: return
+        if index < 0: 
+            # 如果索引无效 (例如没有文件)，清空标签并返回
+            self.filename_label_value.setText("N/A")
+            self.filename_label_value.setToolTip("")
+            # 确保滑块标签也更新
+            self.progress_slider.set_value(index)
+            self.progress_slider.update_label()
+            return
         self.progress_slider.slider.blockSignals(True)
         self.progress_slider.set_value(index)
         self.progress_slider.slider.blockSignals(False)
         self.progress_slider.update_label()
+        
+        try:
+            # 从 model 中获取文件名
+            filepath = self.model._original_files[index]
+            filename = os.path.basename(filepath)
+            self.filename_label_value.setText(filename)
+            self.filename_label_value.setToolTip(filepath) # 完整路径作为提示
+        
+        except (IndexError, AttributeError) as e:
+            print(f"Error updating filename: {e}")
+            self.filename_label_value.setText("N/A")
+            self.filename_label_value.setToolTip("")
+        
         self.canvas.load_image(index)
         self.preview_panel.update_previews(index)
 
@@ -458,6 +492,10 @@ class MainWindow(QMainWindow):
             self.preview_panel.clear_previews()
             self.canvas.load_image(-1)
             self.mask_source_label.setText("来源: N/A") # 清空标签
+            
+            self.filename_label_value.setText("N/A")
+            self.filename_label_value.setToolTip("")
+            
             QMessageBox.information(self, "提示", "在指定路径下未找到图像文件。")
     
     # --- START: 新增槽函数 ---
