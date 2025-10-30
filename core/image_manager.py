@@ -442,61 +442,180 @@ class ImageManager:
 
         return final_path
     
+    # File: /core/image_manager.py
+
     @staticmethod
     def process_selection_path(path: QPainterPath, image_size) -> tuple[bool, QPainterPath]:
         """
-        通过检查每个像素的中心点是否在路径内来确定选中的像素集合，
-        然后直接由这些像素的矩形区域构建最终的、像素对齐的路径。
+        将矢量路径转换为严格像素对齐的边界路径。
+        每个像素都是 1x1 的正方形，边界只能是水平或垂直线段。
         """
         from utils.debugger import debugger
-        from PyQt6.QtCore import QPointF, QRectF # 确保导入 QPointF 和 QRectF
-
-        debugger.log("--- Starting FINAL process_selection_path (Direct Path Build) ---")
-
+        from PyQt6.QtCore import QPointF, QRectF
+        
+        debugger.log("--- Starting pixel-aligned process_selection_path ---")
+        
         if path.isEmpty() or image_size.isEmpty():
             return (False, QPainterPath())
-
-        # 步骤1: 确定需要检查的像素范围
+        
+        # 步骤1：栅格化矢量路径
         height, width = image_size.height(), image_size.width()
-        bounding_rect = path.boundingRect().toRect()
+        mask_image = QImage(image_size, QImage.Format.Format_Grayscale8)
+        mask_image.fill(Qt.GlobalColor.black)
         
-        x_start = max(0, bounding_rect.left())
-        y_start = max(0, bounding_rect.top())
-        x_end = min(width, bounding_rect.right() + 1)
-        y_end = min(height, bounding_rect.bottom() + 1)
-
-        # 步骤2: 找出所有被选中的像素坐标
-        selected_pixels = []
-        for y in range(y_start, y_end):
-            for x in range(x_start, x_end):
-                # 检查像素中心 (x + 0.5, y + 0.5) 是否在用户的矢量路径内
-                if path.contains(QPointF(x + 0.5, y + 0.5)):
-                    selected_pixels.append((x, y))
-
-        # 步骤3: 如果没有选中任何像素，则操作无效
-        if not selected_pixels:
-            debugger.log("Validation failed: No pixel center was contained in the path.")
+        painter = QPainter(mask_image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setBrush(Qt.GlobalColor.white)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPath(path)
+        painter.end()
+        
+        # 步骤2：转换为 NumPy 数组
+        ptr = mask_image.bits()
+        ptr.setsize(mask_image.sizeInBytes())
+        h = mask_image.height()
+        w = mask_image.width()
+        bpl = mask_image.bytesPerLine()
+        arr = np.array(ptr).reshape(h, bpl)[:, :w].copy()
+        
+        if not np.any(arr > 127):
+            debugger.log("Validation failed: No pixel covered.")
             return (False, QPainterPath())
-
-        # 步骤4: 【核心】直接根据选中的像素构建路径
-        # 我们不再需要OpenCV来找轮廓，而是为每个选中的像素画一个1x1的方块
-        snapped_path = QPainterPath()
-        for x, y in selected_pixels:
-            # 为每个像素添加一个 1x1 的矩形
-            # QRectF(x, y, 1, 1) 代表从(x,y)开始，宽高都为1的矩形
-            snapped_path.addRect(QRectF(x, y, 1, 1))
         
-        # 步骤 4: 【核心魔法】调用 .simplified() 方法
-        # Qt 会自动计算这个复合路径的并集，并返回一个只包含最终轮廓的新路径。
-        # 所有内部共享的边都会被自动消除。
-        final_boundary_path = snapped_path.simplified()
-
-        debugger.log(f"Path built directly from {len(selected_pixels)} selected pixels.")
-        debugger.log("--- Finished FINAL process_selection_path ---")
+        # 步骤3：二值化
+        _, binary_arr = cv2.threshold(arr, 127, 255, cv2.THRESH_BINARY)
         
-    
-        # 返回的 final_boundary_path 现在是所有像素块的并集，它会自动形成正确的阶梯状轮廓
-        return (True, final_boundary_path)
+        # 步骤4：提取像素边界
+        snapped_path = ImageManager._extract_pixel_boundaries(binary_arr)
+        
+        if snapped_path.isEmpty():
+            return (False, QPainterPath())
+        
+        debugger.log("--- Finished pixel-aligned process_selection_path ---")
+        return (True, snapped_path)
+
+    @staticmethod
+    def _extract_pixel_boundaries(binary_arr: np.ndarray) -> QPainterPath:
+        """
+        从二值图像中提取严格像素对齐的边界。
+        
+        算法：
+        1. 找到所有选中的像素
+        2. 提取外部边界的水平和垂直线段
+        3. 追踪边界形成封闭路径
+        """
+        from collections import defaultdict
+        from PyQt6.QtCore import QPointF
+        
+        height, width = binary_arr.shape
+        
+        # 找到所有选中的像素（y, x）
+        selected_pixels = set()
+        ys, xs = np.where(binary_arr > 0)
+        for y, x in zip(ys, xs):
+            selected_pixels.add((int(y), int(x)))
+        
+        if not selected_pixels:
+            return QPainterPath()
+        
+        # 提取所有外部边界的线段
+        # 边表示为：(start_point, end_point, direction)
+        # direction: 'H' = 水平, 'V' = 垂直
+        horizontal_edges = set()  # 水平边：((x, y), (x+1, y))
+        vertical_edges = set()    # 垂直边：((x, y), (x, y+1))
+        
+        for py, px in selected_pixels:
+            # 上边界（如果上方没有像素）
+            if (py - 1, px) not in selected_pixels:
+                horizontal_edges.add((px, py, px + 1, py))
+            
+            # 下边界（如果下方没有像素）
+            if (py + 1, px) not in selected_pixels:
+                horizontal_edges.add((px, py + 1, px + 1, py + 1))
+            
+            # 左边界（如果左边没有像素）
+            if (py, px - 1) not in selected_pixels:
+                vertical_edges.add((px, py, px, py + 1))
+            
+            # 右边界（如果右边没有像素）
+            if (py, px + 1) not in selected_pixels:
+                vertical_edges.add((px + 1, py, px + 1, py + 1))
+        
+        # 构建邻接图（点到点）
+        graph = defaultdict(list)
+        
+        for x1, y1, x2, y2 in horizontal_edges:
+            graph[(x1, y1)].append((x2, y2))
+            graph[(x2, y2)].append((x1, y1))
+        
+        for x1, y1, x2, y2 in vertical_edges:
+            graph[(x1, y1)].append((x2, y2))
+            graph[(x2, y2)].append((x1, y1))
+        
+        # 追踪边界形成路径
+        visited_edges = set()
+        paths = []
+        
+        def trace_boundary(start_point):
+            """从起点追踪一个完整的封闭边界"""
+            path = [start_point]
+            current = start_point
+            prev = None
+            
+            while True:
+                # 寻找下一个未访问的邻居
+                found = False
+                for neighbor in graph[current]:
+                    edge = tuple(sorted([current, neighbor]))
+                    
+                    # 跳过刚来的边，避免立即返回
+                    if neighbor == prev:
+                        continue
+                    
+                    if edge not in visited_edges:
+                        visited_edges.add(edge)
+                        path.append(neighbor)
+                        prev = current
+                        current = neighbor
+                        found = True
+                        break
+                
+                if not found:
+                    # 检查是否回到起点（形成闭环）
+                    if current == start_point or (len(path) > 2 and path[-1] in graph[start_point]):
+                        break
+                    else:
+                        # 死路，返回不完整路径
+                        return []
+            
+            return path
+        
+        # 遍历所有可能的起点
+        for point in graph:
+            if point not in [p for path in paths for p in path]:
+                boundary = trace_boundary(point)
+                if len(boundary) >= 4:  # 至少4个点才能形成有效封闭区域
+                    paths.append(boundary)
+        
+        # 转换为 QPainterPath
+        final_path = QPainterPath()
+        
+        for boundary in paths:
+            if not boundary:
+                continue
+            
+            # 移动到起点
+            final_path.moveTo(QPointF(boundary[0][0], boundary[0][1]))
+            
+            # 连接所有点
+            for i in range(1, len(boundary)):
+                final_path.lineTo(QPointF(boundary[i][0], boundary[i][1]))
+            
+            # 闭合路径
+            final_path.closeSubpath()
+        
+        return final_path
+
     
     # 之前的调试代码
     # @staticmethod
