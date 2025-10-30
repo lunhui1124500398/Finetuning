@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup, QRadioButton, QLabel, QGroupBox, QDialog, QSlider, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QAction, QKeySequence, QIcon
+from PyQt6.QtGui import QAction, QKeySequence, QIcon, QGuiApplication
 
 from core.app_model import AppModel
 from core.image_manager import ImageManager
@@ -64,7 +64,23 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("手动抠图工具 V9.1(全新自定义))")
-        self.setGeometry(100, 100, 1800, 1000)
+        # 获取主屏幕的可用几何尺寸（排除任务栏/Dock等）
+        screen = QGuiApplication.primaryScreen()
+        available_geometry = screen.availableGeometry()
+        
+        # 设置窗口为屏幕可用区域的90%
+        window_width = int(available_geometry.width() * 0.9)
+        window_height = int(available_geometry.height() * 0.9)
+        
+        # 计算居中位置
+        x = available_geometry.x() + (available_geometry.width() - window_width) // 2
+        y = available_geometry.y() + (available_geometry.height() - window_height) // 2
+        
+        self.setGeometry(x, y, window_width, window_height)
+        # --- 修改结束 ---
+        
+        # 可选：设置最小尺寸以防止窗口过小
+        self.setMinimumSize(500, 500)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
