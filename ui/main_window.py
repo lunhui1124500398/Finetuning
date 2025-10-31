@@ -54,8 +54,19 @@ class MainWindow(QMainWindow):
         # script_dir = os.path.dirname(os.path.abspath(__file__))
         # icon_path = os.path.join(script_dir, 'resources', 'icons', 'app_icon.png')
         base_path = get_base_path()
-        icon_path = os.path.join(base_path, 'ui', 'resources', 'icons', 'app_icon.png')
+        # 1. 根据操作系统平台确定图标文件名
+        if sys.platform == 'darwin':
+            # 'darwin' 是 macOS 的内部名称
+            icon_filename = 'app_icon.icns'
+            print("Detected macOS, attempting to load .icns icon.")
+        else:
+            # 适用于 Windows ('win32'), Linux ('linux') 等
+            icon_filename = 'app_icon.png'
+            print(f"Detected non-macOS ({sys.platform}), attempting to load .png icon.")
 
+        # 2. 构建完整的图标路径
+        icon_path = os.path.join(base_path, 'ui', 'resources', 'icons', icon_filename)
+        
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
             print("Application icon set successfully.")
@@ -63,7 +74,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V9.1(全新自定义))")
+        self.setWindowTitle("手动抠图工具 V9(全新自定义))")
         # 获取主屏幕的可用几何尺寸（排除任务栏/Dock等）
         screen = QGuiApplication.primaryScreen()
         available_geometry = screen.availableGeometry()

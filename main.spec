@@ -33,7 +33,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='FinetuningV8.8',
+    name='FinetuningV9.1',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
