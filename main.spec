@@ -8,7 +8,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ('config', 'config'),             # <--- 添加 (源文件夹, 目标文件夹)
-        ('ui/resources', 'ui/resources')  # <--- 添加 (源文件夹, 目标文件夹)
+        ('ui/resources', 'ui/resources'),  # <--- 添加 (源文件夹, 目标文件夹)
+        ('Useful_script', 'Useful_script')  # <--- 添加脚本目录，解决打包后无可用脚本问题
     ],
     hiddenimports=[
         'PyQt6.sip',    # PyQt6 经常需要显式导入

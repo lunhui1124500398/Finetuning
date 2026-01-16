@@ -46,6 +46,10 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(appearance_tab, "外观")
         self.setup_appearance_tab(appearance_tab)
 
+        scripts_tab = QWidget()
+        self.tabs.addTab(scripts_tab, "脚本")
+        self.setup_scripts_tab(scripts_tab)
+
         button_layout = QHBoxLayout()
         self.import_button = QPushButton("导入配置...")
         self.export_button = QPushButton("导出配置...")
@@ -153,6 +157,69 @@ class SettingsDialog(QDialog):
 
         # 连接信号
         self.theme_combo.currentTextChanged.connect(self._on_theme_selected)
+    
+    def setup_scripts_tab(self, parent_widget):
+        """设置脚本配置选项卡"""
+        layout = QVBoxLayout(parent_widget)
+        
+        # 输入源设置组
+        input_group = QGroupBox("默认输入源")
+        input_layout = QFormLayout(input_group)
+        
+        self.script_input_combo = QComboBox()
+        self.script_input_combo.addItems([
+            "自动检测 (auto)",
+            "Save Path (已处理)",
+            "Mask Path (原始)"
+        ])
+        self.script_input_combo.setToolTip(
+            "自动检测: 优先 Save Path，否则 Mask Path\n"
+            "Save Path: 始终使用 Save Path\n"
+            "Mask Path: 始终使用 Mask Path"
+        )
+        input_layout.addRow(QLabel("默认输入源:"), self.script_input_combo)
+        layout.addWidget(input_group)
+        
+        # 输出源设置组
+        output_group = QGroupBox("默认输出源")
+        output_layout = QFormLayout(output_group)
+        
+        self.script_output_combo = QComboBox()
+        self.script_output_combo.addItems([
+            "Save Path (固定)",
+            "每次手动选择 (custom)"
+        ])
+        self.script_output_combo.setToolTip(
+            "Save Path: 输出始终指向 Save Path\n"
+            "手动选择: 允许在对话框中修改输出路径"
+        )
+        output_layout.addRow(QLabel("默认输出源:"), self.script_output_combo)
+        layout.addWidget(output_group)
+        
+        # 对话框设置组
+        dialog_group = QGroupBox("对话框设置")
+        dialog_layout = QVBoxLayout(dialog_group)
+        
+        from PyQt6.QtWidgets import QCheckBox
+        self.show_script_dialog_checkbox = QCheckBox("运行脚本时显示配置对话框")
+        self.show_script_dialog_checkbox.setToolTip(
+            "勾选: 每次运行脚本时显示对话框，允许修改输入/输出设置\n"
+            "不勾选: 跳过对话框，直接使用上面的默认设置执行"
+        )
+        self.show_script_dialog_checkbox.setChecked(True)
+        dialog_layout.addWidget(self.show_script_dialog_checkbox)
+        layout.addWidget(dialog_group)
+        
+        # 说明
+        info_label = QLabel(
+            "💡 提示：关闭“显示配置对话框”将使脚本直接使用默认设置执行，\n"
+            "适合已经确定工作流程的用户。"
+        )
+        info_label.setStyleSheet("color: gray; margin-top: 20px;")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        layout.addStretch()
     
     def apply_changes(self):
         """将UI上的设置保存到内存中的config对象，并发出信号通知主窗口刷新。"""
@@ -286,6 +353,28 @@ class SettingsDialog(QDialog):
         
         self._loading_theme = False
         # --- END: 加载主题设置 ---
+        
+        # 加载脚本设置
+        self._load_scripts_settings()
+    
+    def _load_scripts_settings(self):
+        """加载脚本配置"""
+        if not self.config.has_section('Scripts'):
+            return
+        
+        # 输入源
+        input_source = self.config.get('Scripts', 'default_input_source', fallback='auto')
+        input_map = {'auto': 0, 'save_path': 1, 'mask_path': 2}
+        self.script_input_combo.setCurrentIndex(input_map.get(input_source, 0))
+        
+        # 输出源
+        output_source = self.config.get('Scripts', 'default_output_source', fallback='save_path')
+        output_map = {'save_path': 0, 'custom': 1}
+        self.script_output_combo.setCurrentIndex(output_map.get(output_source, 0))
+        
+        # 显示对话框
+        show_dialog = self.config.get('Scripts', 'show_input_dialog', fallback='true').lower() == 'true'
+        self.show_script_dialog_checkbox.setChecked(show_dialog)
 
     def save_settings(self):
         # 保存快捷键
@@ -306,6 +395,28 @@ class SettingsDialog(QDialog):
              # 现在可以安全地写入了
              self.config.set('Theme', 'current_theme', current_theme_selection)
         # --- END: 保存主题设置 ---
+        
+        # --- START: 保存脚本设置 ---
+        self._save_scripts_settings()
+    
+    def _save_scripts_settings(self):
+        """保存脚本配置"""
+        if not self.config.has_section('Scripts'):
+            self.config.add_section('Scripts')
+        
+        # 输入源
+        input_index = self.script_input_combo.currentIndex()
+        input_map = {0: 'auto', 1: 'save_path', 2: 'mask_path'}
+        self.config.set('Scripts', 'default_input_source', input_map.get(input_index, 'auto'))
+        
+        # 输出源
+        output_index = self.script_output_combo.currentIndex()
+        output_map = {0: 'save_path', 1: 'custom'}
+        self.config.set('Scripts', 'default_output_source', output_map.get(output_index, 'save_path'))
+        
+        # 显示对话框
+        show_dialog = 'true' if self.show_script_dialog_checkbox.isChecked() else 'false'
+        self.config.set('Scripts', 'show_input_dialog', show_dialog)
 
     def confirm_restore_defaults(self):
         reply = QMessageBox.question(self, '恢复默认设置',

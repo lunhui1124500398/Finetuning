@@ -11,6 +11,40 @@ import os
 import importlib.util
 import traceback
 
+
+def get_smart_mask_files(model, save_dir: str):
+    """
+    智能获取输入 Mask 文件列表。
+    
+    策略（自动智能检测）：
+    - 如果 save_path 中有文件，优先使用 save_path 的文件（允许脚本链式执行）
+    - 否则，回退到使用 mask_path 的文件
+    
+    Args:
+        model: AppModel 实例
+        save_dir: 脚本保存结果的目录路径
+        
+    Returns:
+        tuple: (file_list, source_name, source_path)
+            - file_list: 输入文件路径列表
+            - source_name: 来源名称 ("save_path" 或 "mask_path")
+            - source_path: 来源目录路径
+    """
+    from core.image_manager import ImageManager
+    
+    # 检查 save_path 中是否有已保存的文件
+    save_files = ImageManager.get_image_files(save_dir) if save_dir and os.path.isdir(save_dir) else []
+    
+    if save_files:
+        # save_path 有文件，使用它们（允许在上一个脚本结果上继续处理）
+        return save_files, "save_path (已处理)", save_dir
+    elif model._mask_files:
+        # 回退到 mask_path
+        mask_path = model.get_path('mask_path')
+        return model._mask_files, "mask_path (原始)", mask_path
+    else:
+        return [], "无", ""
+
 def load_scripts(scripts_dir: str) -> list:
     """
     Scans the scripts_dir for .py files and loads them as modules.

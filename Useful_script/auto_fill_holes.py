@@ -57,27 +57,46 @@ def run(main_window):
     Args:
         main_window: MainWindow instance.
     """
-    from core.image_manager import ImageManager
+    from PyQt6.QtWidgets import QDialog
+    from ui.widgets.script_dialogs import ScriptInputDialog
     
     model = main_window.model
     
-    # 获取 Mask 文件列表和保存路径
-    mask_files = model._mask_files
+    # 获取保存路径
     save_dir = model.get_path('save_path')
 
-    if not mask_files or not save_dir:
-        QMessageBox.warning(main_window, "路径未设置", "请确保已加载 Mask 路径且设置了 Save Path。")
+    if not save_dir:
+        QMessageBox.warning(main_window, "路径未设置", "请确保已设置 Save Path。")
         return
 
+    # 检查是否需要显示对话框
+    show_dialog, auto_files, auto_output = ScriptInputDialog.get_script_config(model, save_dir)
+    
+    if show_dialog:
+        # 显示输入源选择对话框
+        dialog = ScriptInputDialog(
+            script_name=SCRIPT_NAME,
+            model=model,
+            save_dir=save_dir,
+            description="使用形态学方法填补 Mask 中的内部孔洞，不会改变外部轮廓。",
+            parent=main_window
+        )
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        
+        mask_files = dialog.get_input_files()
+        output_dir = dialog.get_output_dir()
+    else:
+        # 使用配置的默认值，跳过对话框
+        mask_files = auto_files
+        output_dir = auto_output
+        
+        if not mask_files:
+            QMessageBox.warning(main_window, "无输入文件", "未找到可处理的 Mask 文件。")
+            return
+
     count = len(mask_files)
-    reply = QMessageBox.question(
-        main_window, 
-        "批量处理确认", 
-        f"即将对 {count} 张 Mask 图像进行填洞处理。\n结果将保存到: {save_dir}\n是否继续？",
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-    )
-    if reply != QMessageBox.StandardButton.Yes:
-        return
 
     # 进度条
     progress = QProgressDialog("正在批量填洞...", "取消", 0, count, main_window)
@@ -94,9 +113,9 @@ def run(main_window):
         if filled is None:
             continue
         
-        # 保存到 save_dir，保持原文件名
+        # 保存到 output_dir，保持原文件名
         filename = os.path.basename(mask_path)
-        save_path = os.path.join(save_dir, filename)
+        save_path = os.path.join(output_dir, filename)
         cv2.imwrite(save_path, filled)
         processed += 1
         
