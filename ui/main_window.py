@@ -5,7 +5,8 @@ import sys
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QCheckBox, QFrame, QSplitter, QMessageBox, QDockWidget,
-    QButtonGroup, QRadioButton, QLabel, QGroupBox, QDialog, QSlider, QSizePolicy
+    QButtonGroup, QRadioButton, QLabel, QGroupBox, QDialog, QSlider, QSizePolicy,
+    QProgressDialog
 )
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence, QIcon, QGuiApplication
@@ -20,6 +21,9 @@ from .widgets.settings_dialog import SettingsDialog
 from .widgets.effects_dialog import EffectsDialog
 from PyQt6.QtWidgets import QMessageBox # 确保已导入
 from utils.helpers import get_base_path
+from core.batch_processor import BatchProcessor
+from ui.widgets.script_dialogs import ApplyMaskScriptDialog
+
 
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -27,6 +31,7 @@ class MainWindow(QMainWindow):
         
         self.model = AppModel()
         self.image_manager = ImageManager()
+        self.batch_processor = BatchProcessor()
         
         # 【修改 1】初始化一个属性来持有效果对话框的实例
         self.effects_dialog = None
@@ -74,7 +79,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V9(全新自定义))")
+        self.setWindowTitle("手动抠图工具 V9.3(全新自定义+内置脚本)")
         # 获取主屏幕的可用几何尺寸（排除任务栏/Dock等）
         screen = QGuiApplication.primaryScreen()
         available_geometry = screen.availableGeometry()
@@ -294,6 +299,15 @@ class MainWindow(QMainWindow):
         self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
         self.undo_action.triggered.connect(self.canvas.undo)
         edit_menu.addAction(self.undo_action)
+
+        scripts_menu = self.menu_bar.addMenu("脚本(&Scripts)")
+        self.script_clean_mask_action = QAction("清洗 Mask (保留最大连通分量)", self)
+        self.script_clean_mask_action.triggered.connect(self.run_script_clean_mask)
+        scripts_menu.addAction(self.script_clean_mask_action)
+
+        self.script_apply_mask_action = QAction("应用 Mask (图像抠取)...", self)
+        self.script_apply_mask_action.triggered.connect(self.run_script_apply_mask)
+        scripts_menu.addAction(self.script_apply_mask_action)
         
         view_menu = self.menu_bar.addMenu("视图(&V)")
         self.toggle_path_dock_action = self.path_dock_widget.toggleViewAction()
@@ -441,6 +455,125 @@ class MainWindow(QMainWindow):
             lambda path: self._update_model_path('save_path', path)
         )
 
+    def run_script_clean_mask(self):
+        """调用 BatchProcessor 执行清洗逻辑"""
+        mask_files = self.model._mask_files
+        save_dir = self.model.get_path('save_path')
+
+        if not mask_files or not save_dir:
+            QMessageBox.warning(self, "路径未设置", "请确保已加载 Mask 路径且设置了 Save Path。")
+            return
+
+        count = len(mask_files)
+        reply = QMessageBox.question(self, "批量处理确认", 
+                                     f"即将处理 {count} 张图像，结果将覆盖保存路径中的文件。\n是否继续？",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes: return
+
+        # 进度条
+        progress = QProgressDialog("正在清洗 Mask...", "取消", 0, count, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+
+        # 定义回调更新进度
+        def progress_cb(current, total):
+            if progress.wasCanceled(): return False
+            progress.setValue(current + 1)
+            QApplication.processEvents() # 保持界面响应
+            return True
+
+        # [CALL] 调用核心逻辑
+        processed = self.batch_processor.run_clean_masks(mask_files, save_dir, progress_cb)
+        
+        progress.setValue(count)
+        
+        # 刷新界面
+        if self.model.load_from_save_path:
+             self.canvas.load_image(self.model.current_index)
+             self.preview_panel.update_previews(self.model.current_index)
+
+        QMessageBox.information(self, "完成", f"已清洗 {processed} 张 Mask。")
+
+    def run_script_apply_mask(self):
+        """
+        弹出对话框配置路径，然后调用 BatchProcessor 执行抠图。
+        """
+        # 1. 准备默认路径 (为了方便用户，预填当前项目的路径)
+        # 注意：用户可能想用已保存的 Cleaned Mask，所以 Mask 默认路径优先设为 Save Path
+        default_mask = self.model.get_path('save_path') or self.model.get_path('mask_path')
+        default_img = self.model.get_path('original_path')
+        # 结果路径默认设为原图路径下的 "masked_output" 文件夹
+        default_save = os.path.join(default_img, "masked_output") if default_img else ""
+
+        # 2. 弹出配置对话框
+        dialog = ApplyMaskScriptDialog(default_mask, default_img, default_save, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        # 3. 获取配置
+        mask_path, img_path, save_path = dialog.get_paths()
+        
+        # 确保保存目录存在
+        if not os.path.exists(save_path):
+            try:
+                os.makedirs(save_path)
+            except OSError as e:
+                QMessageBox.critical(self, "错误", f"无法创建保存目录:\n{e}")
+                return
+
+        # 4. 准备进度条
+        # 我们需要先统计一下文件数量来设置进度条最大值，但 batch_processor 里会再算一次。
+        # 为了简单，我们先大概估算或让 batch_processor 处理。
+        # 这里为了 UI 响应，我们在 BatchProcessor 里并没有计算 total 的逻辑暴露出来。
+        # 简单起见，我们先获取一下 Mask 数量用于进度条显示。
+        from core.image_manager import ImageManager # 临时导入
+        total_files = len(ImageManager.get_image_files(mask_path))
+        
+        progress = QProgressDialog("正在批量抠图...", "取消", 0, total_files, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        
+        def progress_cb(current, total):
+            if progress.wasCanceled(): return False
+            progress.setValue(current + 1)
+            QApplication.processEvents()
+            return True
+
+        # 5. [CALL] 调用核心逻辑
+        processed = self.batch_processor.run_apply_mask_to_images(
+            mask_path, img_path, save_path, progress_cb
+        )
+        
+        progress.setValue(total_files)
+        QMessageBox.information(self, "完成", f"处理完成！\n共生成 {processed} 张抠图结果。\n保存在: {save_path}")
+
+    # --- [MODIFIED] 打开效果对话框时传递 Pixmap ---
+    def open_effects_chooser(self):
+        if self.model.current_index < 0:
+            QMessageBox.warning(self, "提示", "请先加载图像。")
+            return
+
+        # 获取当前正在显示的底图 (可能是原图，也可能是去噪图)
+        current_base_pixmap = self.canvas._denoised_pixmap if (self.model.show_denoised and self.canvas._denoised_pixmap) else self.canvas._original_pixmap
+
+        if self.effects_dialog is None or not self.effects_dialog.isVisible():
+            # [CHANGE] 传递 current_base_pixmap 给 Dialog
+            self.effects_dialog = EffectsDialog(self.model, self, current_pixmap=current_base_pixmap)
+
+            def apply_new_settings(settings):
+                self.canvas.push_undo_state_for_effects()
+                self.model.update_effect_settings(settings)
+            
+            self.effects_dialog.settings_applied.connect(apply_new_settings)
+            self.effects_dialog.finished.connect(self.on_effects_dialog_finished)
+
+            self.effects_dialog.show()
+        else:
+            # 如果对话框已经打开，更新它内部引用的图片（防止用户换图了但对话框还在用旧图计算Auto）
+            self.effects_dialog.current_pixmap = current_base_pixmap
+            self.effects_dialog.raise_()
+            self.effects_dialog.activateWindow()
+
     # --- START: 新增橡皮擦滑块的槽函数 ---
     @pyqtSlot(int)
     def on_eraser_size_changed(self, size):
@@ -505,6 +638,17 @@ class MainWindow(QMainWindow):
             self.filename_label_value.setToolTip("")
         
         self.canvas.load_image(index)
+        # [CRITICAL FIX] 如果效果对话框是打开的，必须把新图片传给它，并强制应用当前的滑块值
+        if self.effects_dialog and self.effects_dialog.isVisible():
+            # 获取当前底图 (原图或去噪图)
+            current_base_pixmap = self.canvas._denoised_pixmap if (self.model.show_denoised and self.canvas._denoised_pixmap) else self.canvas._original_pixmap
+            
+            # 更新对话框的引用图 (用于 Auto 计算)
+            self.effects_dialog.set_current_pixmap(current_base_pixmap)
+            
+            # 强制对话框重新发射一次 preview 信号
+            # 这样 ImageCanvas 就会收到 preview_effects_changed 信号，并用当前滑块的值渲染新图
+            self.effects_dialog.force_preview_update()
         self.preview_panel.update_previews(index)
 
     @pyqtSlot(int)
@@ -641,40 +785,56 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
     
     def open_effects_chooser(self):
-        """
-        以非模态方式打开效果对话框，以实现实时预览和交互。
-        """
         if self.model.current_index < 0:
             QMessageBox.warning(self, "提示", "请先加载图像。")
             return
 
-        # 【修改 2】检查对话框是否已创建并可见，防止重复打开
-        if self.effects_dialog is None or not self.effects_dialog.isVisible():
-            # 将对话框实例存储在 self.effects_dialog 中，防止其被垃圾回收
-            self.effects_dialog = EffectsDialog(self.model, self)
+        # 获取当前图
+        current_base_pixmap = self.canvas._denoised_pixmap if (self.model.show_denoised and self.canvas._denoised_pixmap) else self.canvas._original_pixmap
 
+        # 如果对话框还不存在，创建它
+        if self.effects_dialog is None:
+            self.effects_dialog = EffectsDialog(self.model, self, current_pixmap=current_base_pixmap)
+            
+            # 定义 Apply 回调
             def apply_new_settings(settings):
                 self.canvas.push_undo_state_for_effects()
                 self.model.update_effect_settings(settings)
             
+            # 连接信号 (只连一次)
             self.effects_dialog.settings_applied.connect(apply_new_settings)
             self.effects_dialog.finished.connect(self.on_effects_dialog_finished)
-
-            # 【修改 3】使用 .show() 以非模态方式显示对话框
-            self.effects_dialog.show()
+        
         else:
-            self.effects_dialog.raise_()
-            self.effects_dialog.activateWindow()
+            # 如果已存在，更新图片引用
+            self.effects_dialog.set_current_pixmap(current_base_pixmap)
+            # 恢复到上一次的正式设置 (或者保持当前状态，看需求。通常打开时应该显示当前生效的设置)
+            # self.effects_dialog._load_settings_to_ui(self.model.effect_settings) 
+
+        # 显示对话框 (非模态)
+        self.effects_dialog.show()
+        self.effects_dialog.raise_()
+        self.effects_dialog.activateWindow()
 
     def on_effects_dialog_finished(self, result):
-        """
-        【新增方法】当效果对话框关闭时（通过“确定”、“取消”或“X”按钮），此槽函数被调用。
-        """
+        """当效果对话框关闭时调用"""
         if result != QDialog.DialogCode.Accepted:
+            # 如果是取消或关闭，恢复预览前的状态
             self.model.revert_preview_to_last_settings()
         
-        if self.effects_dialog:
-            try:
-                self.effects_dialog.disconnect()
-            except TypeError:
-                pass
+        # [FIXED] 不要在这里 disconnect！因为我们复用了 self.effects_dialog 实例。
+        # 如果 disconnect 了，下次再打开，settings_applied 信号就断了，Apply 按钮会失效。
+        pass
+
+    # def on_effects_dialog_finished(self, result):
+    #     """
+    #     【新增方法】当效果对话框关闭时（通过“确定”、“取消”或“X”按钮），此槽函数被调用。
+    #     """
+    #     if result != QDialog.DialogCode.Accepted:
+    #         self.model.revert_preview_to_last_settings()
+        
+    #     if self.effects_dialog:
+    #         try:
+    #             self.effects_dialog.disconnect()
+    #         except TypeError:
+    #             pass

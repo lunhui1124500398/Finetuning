@@ -131,6 +131,101 @@ class ImageManager:
     # # --- END: B3 ---
 
     @staticmethod
+    def calculate_auto_levels(pixmap: QPixmap, saturation_percentage: float = 0.5) -> tuple[int, int]:
+        """
+        使用百分位数 (Percentile) 计算自动对比度的 Min 和 Max 值。
+        
+        Args:
+            pixmap: QPixmap 对象
+            saturation_percentage: 允许饱和的像素百分比 (例如 0.5 表示 0.5% 和 99.5%)
+        
+        Returns:
+            (min_level, max_level) 范围在 0-255 之间
+        """
+        if not pixmap or pixmap.isNull():
+            return 0, 255
+
+        # 1. 转换为灰度 NumPy 数组
+        # 使用 QImage 转换确保数据准确
+        qimage = pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+        
+        ptr = qimage.bits()
+        ptr.setsize(qimage.sizeInBytes())
+        h, w = qimage.height(), qimage.width()
+        bpl = qimage.bytesPerLine()
+        
+        # 提取有效数据区域
+        arr = np.array(ptr).reshape(h, bpl)[:, :w].copy()
+
+        # 2. 如果图像基本是纯色或全黑，直接返回默认值
+        if arr.max() == arr.min():
+            return 0, 255
+
+        # 3. 使用 np.percentile 计算阈值
+        # 为了提高速度，如果图像很大，可以进行降采样计算
+        sample = arr
+        if arr.size > 1000000:
+             sample = arr.ravel()[::100] # 每100个像素取一个样
+
+        # 计算低位和高位百分比
+        # 例如 saturation=0.5 -> low=0.5, high=99.5
+        low_p = saturation_percentage
+        high_p = 100.0 - saturation_percentage
+        
+        auto_min, auto_max = np.percentile(sample, [low_p, high_p])
+        
+        # 4. 确保结果在 0-255 整数范围内，且 min < max
+        auto_min = int(max(0, auto_min))
+        auto_max = int(min(255, auto_max))
+
+        # 防止 min >= max 的极端情况
+        if auto_min >= auto_max:
+             # 如果计算结果挤在一起，尝试稍微拉开
+             mid = (auto_min + auto_max) // 2
+             auto_min = max(0, mid - 10)
+             auto_max = min(255, mid + 10)
+
+        return auto_min, auto_max
+    
+    @staticmethod
+    def keep_largest_component(mask_pixmap: QPixmap) -> QPixmap:
+        """
+        保留二值图中最大的连通分量，去除噪点。
+        """
+        if not mask_pixmap or mask_pixmap.isNull():
+            return mask_pixmap
+
+        # 转为单通道 numpy 数组
+        qimage = mask_pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+        ptr = qimage.bits()
+        ptr.setsize(qimage.sizeInBytes())
+        h, w = qimage.height(), qimage.width()
+        bpl = qimage.bytesPerLine()
+        arr = np.array(ptr).reshape(h, bpl)[:, :w].copy()
+
+        # 二值化确保只有 0 和 255 (容错)
+        _, binary = cv2.threshold(arr, 127, 255, cv2.THRESH_BINARY)
+
+        # 连通域分析
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+        # 如果没有前景或只有一个背景，直接返回
+        if num_labels <= 1:
+            return mask_pixmap
+
+        # 找到面积最大的连通域 (忽略 label 0，因为它是背景)
+        largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+        
+        # 创建新 Mask
+        new_mask = np.zeros_like(binary)
+        new_mask[labels == largest_label] = 255
+
+        # 转回 QPixmap
+        result_qimage = QImage(new_mask.data, w, h, w, QImage.Format.Format_Grayscale8)
+        # 必须 copy() 否则数据所有权在 numpy 数组销毁后会出问题
+        return QPixmap.fromImage(result_qimage.copy())
+
+    @staticmethod
     def save_pixmap(pixmap, file_path):
         if not pixmap or not file_path:
             return
