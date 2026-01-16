@@ -7,6 +7,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from core.image_manager import ImageManager
+import numpy as np
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 
 class EffectsDialog(QDialog):
     # 信号：当用户点击 Apply 或 OK 时发出，携带最终的设置
@@ -15,7 +18,12 @@ class EffectsDialog(QDialog):
     def __init__(self, model, parent=None, current_pixmap=None):
         super().__init__(parent)
         self.model = model
+        self.current_pixmap = None # Initialize to None first
+        self.hist_sample = None # Cache for histogram data
         self.current_pixmap = current_pixmap  # 保存当前图像引用用于 Auto 计算
+        if self.current_pixmap:
+             self._update_histogram_data()
+        
         self.setWindowTitle("图像效果调整")
         self.setMinimumSize(500, 450) # 稍微加大高度以容纳新控件
 
@@ -29,6 +37,9 @@ class EffectsDialog(QDialog):
     def set_current_pixmap(self, pixmap):
         """[NEW] 更新当前用于 Auto 计算的图像引用"""
         self.current_pixmap = pixmap
+        self._update_histogram_data() # Pre-calculate histogram data when image changes
+        self._update_histogram_lines() # Refresh plot
+
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -57,72 +68,6 @@ class EffectsDialog(QDialog):
         button_box.rejected.connect(self.reject)
         self.apply_button.clicked.connect(self._apply_changes)
     
-    def _on_auto_clicked(self):
-        """
-        Auto 按钮逻辑：
-        1. 基于图像内容计算 Percentile Min/Max。
-        2. 如果当前设置已经是全范围(0-255)，直接应用计算结果。
-        3. 如果当前设置已经接近计算结果，或者用户再次点击，则在当前基础上向内“收缩”，增强对比度。
-        """
-        if not self.current_pixmap:
-            return
-            
-        # 1. 获取当前 UI 上的 min/max
-        current_min = self.min_level_slider.value()
-        current_max = self.max_level_slider.value()
-        
-        # 2. 计算基于图像统计学的理论最佳值 (0.5% 饱和度)
-        auto_min_stat, auto_max_stat = ImageManager.calculate_auto_levels(self.current_pixmap, saturation_percentage=0.5)
-        
-        # 调试打印，看看算出来是多少
-        print(f"Auto Calc: Stat=({auto_min_stat}, {auto_max_stat}), Current=({current_min}, {current_max})")
-
-        new_min, new_max = 0, 255
-
-        # 3. 决策逻辑
-        is_default = (current_min == 0 and current_max == 255)
-        
-        # 检查当前值是否比统计值“更宽” (意味着还有增强空间)
-        # 例如: 统计是(20, 200)，当前是(0, 255)，则应用 (20, 200)
-        range_is_wider_than_stat = (current_min < auto_min_stat) or (current_max > auto_max_stat)
-
-        if is_default or range_is_wider_than_stat:
-            # 第一阶段：应用统计学计算结果
-            new_min = auto_min_stat
-            new_max = auto_max_stat
-            
-            # 极端情况：如果统计结果依然是 0-255 (说明图像直方图本身就铺满了)，
-            # 强制收缩一点点，让用户看到“有反应”
-            if new_min == 0 and new_max == 255:
-                new_min = 10
-                new_max = 245
-        else:
-            # 第二阶段：用户觉得不够，再次点击 -> 在当前基础上强制收缩 (ImageJ 风格)
-            # 每次向内收缩当前范围的 5%
-            current_range = current_max - current_min
-            step = max(2, int(current_range * 0.05)) 
-            
-            new_min = min(current_min + step, 120) # 限制暗部最大只到 120
-            new_max = max(current_max - step, 135) # 限制亮部最小只到 135
-            
-            if new_min >= new_max: # 防止交叉
-                 new_min = current_min
-                 new_max = current_max
-
-        # 4. 更新 UI 并强制刷新
-        # 阻断信号防止 setValue 触发两次 update，最后手动调一次
-        self.blockSignals(True) 
-        self.manual_enabled_check.setChecked(True)
-        self.min_level_slider.setValue(new_min)
-        self.max_level_slider.setValue(new_max)
-        
-        # 记得同步 SpinBox (虽然 Slider 绑定了，但 blockSignals 后可能不同步，保险起见)
-        self.min_level_spin.setValue(new_min)
-        self.max_level_spin.setValue(new_max)
-        self.blockSignals(False)
-
-        print(f"Auto Applied: ({new_min}, {new_max})")
-        self._update_preview() # 显式触发预览更新
 
     def _setup_algo_tab(self, parent_widget):
         layout = QVBoxLayout(parent_widget)
@@ -167,6 +112,18 @@ class EffectsDialog(QDialog):
         # 使用 FormLayout 排列控件
         control_layout = QFormLayout(self.manual_group)
 
+        # --- [NEW] Histogram ---
+        self.hist_figure = Figure(figsize=(4, 2), dpi=100)
+        self.hist_figure.patch.set_facecolor('#f0f0f0') # Match groupbox background roughly
+        self.hist_canvas = FigureCanvasQTAgg(self.hist_figure)
+        self.hist_ax = self.hist_figure.add_subplot(111)
+        self.hist_figure.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.15)
+        self.hist_ax.axis('off')
+        
+        # Add histogram to the top of the manual tab
+        layout.insertWidget(1, self.hist_canvas) # Insert below checkbox, above controls
+
+
         # 定义一个内部辅助函数来创建 "滑块 + 数字框" 的组合
         def create_control(min_v, max_v, default_v, label_txt):
             row_layout = QHBoxLayout()
@@ -183,7 +140,7 @@ class EffectsDialog(QDialog):
             
             # 双向绑定
             slider.valueChanged.connect(lambda v: spin.blockSignals(True) or spin.setValue(v) or spin.blockSignals(False))
-            slider.valueChanged.connect(self._update_preview) # Slider 拖动直接触发预览
+            slider.valueChanged.connect(self._update_preview_with_hist) # Slider 拖动直接触发预览和直方图更新
             spin.valueChanged.connect(lambda v: slider.setValue(v)) # Spin 变动会触发 Slider 的 valueChanged -> _update_preview
 
             row_layout.addWidget(slider)
@@ -197,6 +154,31 @@ class EffectsDialog(QDialog):
         self.max_level_slider, self.max_level_spin = create_control(0, 255, 255, "Max Level:")
         self.brightness_slider, self.brightness_spin = create_control(-100, 100, 0, "Brightness:")
         self.contrast_slider, self.contrast_spin = create_control(-100, 100, 0, "Contrast:")
+        
+        # [NEW] Gamma slider (使用 QDoubleSpinBox，范围 0.1-3.0)
+        gamma_row = QHBoxLayout()
+        self.gamma_slider = QSlider(Qt.Orientation.Horizontal)
+        self.gamma_slider.setRange(10, 300)  # 代表 0.1 - 3.0 (值/100)
+        self.gamma_slider.setValue(100)  # 默认 1.0
+        
+        self.gamma_spin = QDoubleSpinBox()
+        self.gamma_spin.setRange(0.1, 3.0)
+        self.gamma_spin.setSingleStep(0.1)
+        self.gamma_spin.setDecimals(2)
+        self.gamma_spin.setValue(1.0)
+        
+        # 双向绑定 (slider is int *100, spin is float)
+        self.gamma_slider.valueChanged.connect(lambda v: (
+            self.gamma_spin.blockSignals(True),
+            self.gamma_spin.setValue(v / 100.0),
+            self.gamma_spin.blockSignals(False)
+        ))
+        self.gamma_slider.valueChanged.connect(self._update_preview_with_hist)
+        self.gamma_spin.valueChanged.connect(lambda v: self.gamma_slider.setValue(int(v * 100)))
+        
+        gamma_row.addWidget(self.gamma_slider)
+        gamma_row.addWidget(self.gamma_spin)
+        control_layout.addRow("Gamma:", gamma_row)
 
         # 按钮区
         btn_layout = QHBoxLayout()
@@ -251,7 +233,7 @@ class EffectsDialog(QDialog):
             elif isinstance(control, QComboBox):
                 control.currentIndexChanged.connect(self._update_preview)
             elif isinstance(control, QSlider):
-                control.valueChanged.connect(self._update_preview)
+                control.valueChanged.connect(self._update_preview_with_hist)
 
     def _load_settings_to_ui(self, settings=None):
         """用给定的设置字典更新UI界面"""
@@ -275,6 +257,15 @@ class EffectsDialog(QDialog):
         set_val(self.max_level_slider, self.max_level_spin, settings['manual_max'])
         set_val(self.brightness_slider, self.brightness_spin, settings['manual_brightness'])
         set_val(self.contrast_slider, self.contrast_spin, settings['manual_contrast'])
+        
+        # [NEW] Gamma
+        gamma_val = settings.get('manual_gamma', 1.0)
+        self.gamma_slider.blockSignals(True)
+        self.gamma_spin.blockSignals(True)
+        self.gamma_slider.setValue(int(gamma_val * 100))
+        self.gamma_spin.setValue(gamma_val)
+        self.gamma_slider.blockSignals(False)
+        self.gamma_spin.blockSignals(False)
 
         self.algo_enabled_check.setChecked(settings['algo_enabled'])
         self.algo_combo.setCurrentText(settings['algo_name'])
@@ -298,6 +289,7 @@ class EffectsDialog(QDialog):
             'manual_max': self.max_level_slider.value(),
             'manual_brightness': self.brightness_slider.value(),
             'manual_contrast': self.contrast_slider.value(),
+            'manual_gamma': self.gamma_spin.value(),  # [NEW]
             
             'algo_enabled': self.algo_enabled_check.isChecked(),
             'algo_name': self.algo_combo.currentText().lower().replace(" ", "_"),
@@ -306,59 +298,98 @@ class EffectsDialog(QDialog):
         }
 
     def _on_auto_clicked(self):
-        """Auto 按钮逻辑：计算自动对比度"""
+        """
+        Auto 按钮逻辑 (仿 ImageJ)：
+        1. 计算基于 Percentile 的建议范围 (Auto Levels)
+        2. 如果当前范围明显宽于建议范围，则应用建议范围。
+        3. 如果当前范围已经接近建议范围，则在当前基础上收缩 (Shrink)，增强对比度。
+        """
         if not self.current_pixmap:
             print("Auto Failed: No current_pixmap set.")
             return
-            
-        # 1. 获取当前的 min/max
+
+        # 1. 获取当前状态
         current_min = self.min_level_slider.value()
         current_max = self.max_level_slider.value()
-        auto_min_stat, auto_max_stat = ImageManager.calculate_auto_levels(self.current_pixmap, saturation_percentage=0.5)
-        new_min, new_max = 0, 255
-        is_default = (current_min == 0 and current_max == 255)
-        range_is_wider_than_stat = (current_min < auto_min_stat) or (current_max > auto_max_stat)
+        current_range_width = current_max - current_min
 
-        # 2. 如果是第一次点击 (还是默认值 0-255)，进行全局直方图计算
-        if is_default or range_is_wider_than_stat:
-            new_min = auto_min_stat
-            new_max = auto_max_stat
-            if new_min == 0 and new_max == 255:
-                new_min = 10
-                new_max = 245
-        else:
-            # 3. 用户希望“逐级提高”，我们在当前基础上向内收缩 5%
-            current_range = current_max - current_min
-            step = max(1, int(current_range * 0.05)) # 每次收缩 5%
-            new_min = min(current_min + step, 120) # 限制暗部不要收缩得太离谱
-            new_max = max(current_max - step, 135) # 限制亮部
-            if new_min >= new_max: 
-                 new_min = current_min
-                 new_max = current_max
+        # 2. 计算统计学最佳范围 (0.04% - 99.96%)
+        auto_min, auto_max = ImageManager.calculate_auto_levels(self.current_pixmap)
+        auto_range_width = auto_max - auto_min
         
-        # [CRITICAL FIXED] 只阻塞控件信号，不阻塞 Dialog 信号
-        self.manual_enabled_check.setChecked(True) # 这会触发一次 update
+        # 3. 决策逻辑
+        # 判断条件：当前范围是否显著宽于自动范围 (宽松一点，1.1倍)
+        # 如果是默认状态 (0-255) 或者 当前范围很大，则直接跳转到 Auto Levels
+        is_default = (current_min == 0 and current_max == 255)
+        range_is_wider = current_range_width > (auto_range_width * 1.1)
+
+        new_min, new_max = current_min, current_max
+
+        if is_default or range_is_wider:
+            # Mode A: Apply Auto Levels
+            new_min = auto_min
+            new_max = auto_max
+        else:
+            # Mode B: Shrink (增强对比度)
+            # 在当前范围基础上收缩，而不是使用硬编码的限制
+            # 每次收缩当前宽度的 5% (左右各 5%) -> 总共 10%
+            # 参考 enhance_from_another_project.py 的逻辑
+            
+            shrink_factor = 0.05
+            margin = int(current_range_width * shrink_factor)
+            if margin < 1: margin = 1 # 至少收缩 1 个单位
+            
+            new_min = current_min + margin
+            new_max = current_max - margin
+            
+            # 安全检查：防止交叉
+            if new_min >= new_max:
+                 mid = (current_min + current_max) // 2
+                 new_min = mid - 1
+                 new_max = mid + 1
+            
+            # 钳位到 0-255
+            new_min = max(0, new_min)
+            new_max = min(255, new_max)
+
+        # 4. 应用设置
+        self.manual_enabled_check.setChecked(True)
         
         def safe_set(slider, spin, val):
-            slider.blockSignals(True) # 防止触发 update
+            slider.blockSignals(True)
             spin.blockSignals(True)
             slider.setValue(val)
             spin.setValue(val)
             slider.blockSignals(False)
             spin.blockSignals(False)
-            
+
         safe_set(self.min_level_slider, self.min_level_spin, new_min)
         safe_set(self.max_level_slider, self.max_level_spin, new_max)
         
-        print(f"Auto Applied: {new_min}-{new_max}")
-        self._update_preview() # 显式触发一次
+        # [NEW] 重置额外的亮度、对比度和 Gamma 滑块，确保纯粹的 Level 调整
+        safe_set(self.brightness_slider, self.brightness_spin, 0)
+        safe_set(self.contrast_slider, self.contrast_spin, 0)
+        
+        # Reset Gamma to 1.0
+        self.gamma_slider.blockSignals(True)
+        self.gamma_spin.blockSignals(True)
+        self.gamma_slider.setValue(100)
+        self.gamma_spin.setValue(1.0)
+        self.gamma_slider.blockSignals(False)
+        self.gamma_spin.blockSignals(False)
+        
+        print(f"Auto Applied: {new_min}-{new_max} (Original Auto: {auto_min}-{auto_max})")
+        self._update_preview()
+        self._update_histogram_lines() # [NEW] Update histogram lines immediately
 
     def _reset_manual_defaults(self):
-        """Set Defaults: 恢复到标准的 0-255"""
+        """Set Defaults: 恢复到标准的 0-255, Gamma 1.0"""
         self.min_level_slider.setValue(0)
         self.max_level_slider.setValue(255)
         self.brightness_slider.setValue(0)
         self.contrast_slider.setValue(0)
+        self.gamma_slider.setValue(100)  # [NEW] gamma = 1.0
+        self.gamma_spin.setValue(1.0)
 
     def _revert_to_initial(self):
         """Reset: 恢复到打开对话框时的状态"""
@@ -392,3 +423,53 @@ class EffectsDialog(QDialog):
     
     def force_preview_update(self):
         self._update_preview()
+
+    # --- Histogram Logic ---
+    def _update_histogram_data(self):
+        """Calculates histogram data from current_pixmap (cached)"""
+        if not self.current_pixmap or self.current_pixmap.isNull():
+            self.hist_sample = None
+            return
+
+        # QPixmap -> Grayscale Numpy
+        qimage = self.current_pixmap.toImage().convertToFormat(self.current_pixmap.toImage().Format.Format_Grayscale8)
+        ptr = qimage.bits()
+        ptr.setsize(qimage.sizeInBytes())
+        h, w = qimage.height(), qimage.width()
+        bpl = qimage.bytesPerLine()
+        arr = np.array(ptr).reshape(h, bpl)[:, :w]
+        
+        # Downsample for performance (similar to learn/enhance_from_another_project.py)
+        if arr.size > 1000000:
+            self.hist_sample = arr.ravel()[::100]
+        else:
+            self.hist_sample = arr.ravel()
+
+    def _update_histogram_lines(self):
+        """Redraws histogram with current Min/Max lines"""
+        self.hist_ax.clear()
+        self.hist_ax.axis('off')
+        
+        if self.hist_sample is None:
+            self.hist_ax.text(0.5, 0.5, "No Image", ha='center')
+            self.hist_canvas.draw()
+            return
+
+        # Plot Histogram
+        self.hist_ax.hist(self.hist_sample, bins=64, color='#888888', alpha=0.6, density=True)
+        
+        # Plot Lines
+        min_v = self.min_level_slider.value()
+        max_v = self.max_level_slider.value()
+        
+        self.hist_ax.axvline(min_v, color='blue', linestyle='--', linewidth=1)
+        self.hist_ax.axvline(max_v, color='red', linestyle='--', linewidth=1)
+        
+        # Ensure x-axis covers 0-255
+        self.hist_ax.set_xlim(-5, 260)
+        
+        self.hist_canvas.draw()
+
+    def _update_preview_with_hist(self):
+        self._update_preview()
+        self._update_histogram_lines() # Refresh lines when sliders move

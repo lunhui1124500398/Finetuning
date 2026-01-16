@@ -6,8 +6,35 @@ from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBitmap, QPaint
 from PyQt6.QtCore import Qt, QPointF
 from utils.debugger import debugger
 
+from functools import lru_cache
+
 class ImageManager:
     """处理所有图像加载、处理、保存等任务。"""
+
+    # --- [NEW] LUT Cache ---
+    @staticmethod
+    @lru_cache(maxsize=32)
+    def _generate_lut_8bit(min_level: int, max_level: int, gamma: float) -> np.ndarray:
+        """
+        Generates a cached LUT for 8-bit images.
+        Cache key: (min_level, max_level, gamma)
+        """
+        lut = np.arange(256, dtype=np.float32)
+        
+        # Level adjustment (normalize to 0-1)
+        if max_level == min_level:
+            max_level = min_level + 1
+        scale = 1.0 / (max_level - min_level)
+        lut = (lut - min_level) * scale
+        lut = np.clip(lut, 0, 1)
+        
+        # Gamma correction
+        if gamma != 1.0 and gamma > 0:
+            lut = np.power(lut, 1.0 / gamma)
+        
+        # Scale back to 0-255
+        lut = (lut * 255).astype(np.uint8)
+        return lut
 
     @staticmethod
     def get_image_files(directory):
@@ -33,6 +60,16 @@ class ImageManager:
     
     @staticmethod
     def apply_image_effects(pixmap: QPixmap, settings: dict) -> QPixmap:
+        """
+        应用图像效果，支持 8-bit 和 16-bit 图像。
+        settings 字典需包含:
+          - manual_enabled: bool
+          - manual_min, manual_max: int (0-255 for 8-bit, 0-65535 for 16-bit)
+          - manual_brightness, manual_contrast: int (-100 to 100)
+          - manual_gamma: float (0.1 to 3.0, default 1.0)
+          - algo_enabled: bool
+          - algo_name, clahe_clip_limit, clahe_grid_size: CLAHE params
+        """
         if not pixmap or pixmap.isNull():
             return pixmap
 
@@ -41,42 +78,53 @@ class ImageManager:
         width, height = qimage.width(), qimage.height()
         ptr = qimage.bits()
         ptr.setsize(qimage.sizeInBytes())
-        # --- START: 修复 ---
         bpl = qimage.bytesPerLine()
-        # 先重塑 (h, bpl)，再切片取 (h, w*3)，最后重塑为 (h, w, 3)
         arr = np.array(ptr).reshape(height, bpl)[:, :width * 3].reshape(height, width, 3).copy()
+        
+        # 检测位深 (QImage 转 RGB888 后固定为 8-bit，但我们保留接口以便未来扩展)
+        # 注意：当前 QPixmap 流程固定为 8-bit；如果需要真正的 16-bit 支持，
+        # 需要从原始文件直接加载为 numpy 数组。
+        bit_depth = 8  # 固定为 8-bit (QImage 限制)
+        max_val = 255 if bit_depth == 8 else 65535
 
         processed_arr = arr
 
         # 2. 应用手动调整
         if settings.get('manual_enabled', False):
-            # 对比度 和 亮度
+            # 获取参数
             contrast = settings.get('manual_contrast', 0)
             brightness = settings.get('manual_brightness', 0)
-            # alpha (对比度): [-100, 100] -> [0.0, 2.0]
-            alpha = 1.0 + contrast / 100.0
-            # beta (亮度): [-100, 100]
-            beta = brightness
-            processed_arr = cv2.convertScaleAbs(processed_arr, alpha=alpha, beta=beta)
-
-            # Min/Max Levels
             min_level = settings.get('manual_min', 0)
-            max_level = settings.get('manual_max', 255)
-            if min_level >= max_level: # 防止除零错误
-                max_level = min_level + 1
+            max_level = settings.get('manual_max', max_val)
+            gamma = settings.get('manual_gamma', 1.0)
+            
+            # 2a. 对比度 和 亮度 (alpha/beta)
+            if contrast != 0 or brightness != 0:
+                alpha = 1.0 + contrast / 100.0
+                beta = brightness
+                processed_arr = cv2.convertScaleAbs(processed_arr, alpha=alpha, beta=beta)
 
-            # 使用查找表(LUT)进行高效的像素值重映射
-            lut = np.arange(256, dtype=np.uint8)
-            mask = (lut >= min_level) & (lut <= max_level)
-            lut[~mask] = 0 # 小于min的设为0
-            lut[lut > max_level] = 255 # 大于max的设为255
-            lut[mask] = np.uint8(255.0 * (lut[mask] - min_level) / (max_level - min_level))
-
-            processed_arr = cv2.LUT(processed_arr, lut)
+            # 2b. Min/Max Levels + Gamma (使用 LUT)
+            if min_level != 0 or max_level != max_val or gamma != 1.0:
+                if min_level >= max_level:
+                    max_level = min_level + 1
+                
+                if bit_depth == 8:
+                    # 8-bit: 使用缓存的 LUT
+                    lut = ImageManager._generate_lut_8bit(min_level, max_level, gamma)
+                    processed_arr = cv2.LUT(processed_arr, lut)
+                else:
+                    # 16-bit: 使用浮点运算 (未来扩展)
+                    processed_float = processed_arr.astype(np.float32)
+                    scale = 1.0 / (max_level - min_level)
+                    processed_float = (processed_float - min_level) * scale
+                    processed_float = np.clip(processed_float, 0, 1)
+                    if gamma != 1.0 and gamma > 0:
+                        processed_float = np.power(processed_float, 1.0 / gamma)
+                    processed_arr = (processed_float * max_val).astype(np.uint8 if bit_depth == 8 else np.uint16)
 
         # 3. 应用算法增强
         if settings.get('algo_enabled', False):
-            # 将彩色图像转为灰度进行处理
             gray = cv2.cvtColor(processed_arr, cv2.COLOR_RGB2GRAY)
             enhanced_gray = gray
 
@@ -89,7 +137,6 @@ class ImageManager:
             elif algo_name == 'global_histogram_equalization':
                 enhanced_gray = cv2.equalizeHist(gray)
 
-            # 将处理后的灰度图转回三通道RGB
             processed_arr = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
 
         # 4. 转换 NumPy Array -> QPixmap
@@ -131,13 +178,13 @@ class ImageManager:
     # # --- END: B3 ---
 
     @staticmethod
-    def calculate_auto_levels(pixmap: QPixmap, saturation_percentage: float = 0.5) -> tuple[int, int]:
+    def calculate_auto_levels(pixmap: QPixmap, saturation_percentage: float = 0.04) -> tuple[int, int]:
         """
         使用百分位数 (Percentile) 计算自动对比度的 Min 和 Max 值。
         
         Args:
             pixmap: QPixmap 对象
-            saturation_percentage: 允许饱和的像素百分比 (例如 0.5 表示 0.5% 和 99.5%)
+            saturation_percentage: 允许饱和的像素百分比 (默认 0.04 表示 0.04% 和 99.96%)
         
         Returns:
             (min_level, max_level) 范围在 0-255 之间

@@ -300,14 +300,9 @@ class MainWindow(QMainWindow):
         self.undo_action.triggered.connect(self.canvas.undo)
         edit_menu.addAction(self.undo_action)
 
+        # --- [MODIFIED] 动态加载脚本菜单 ---
         scripts_menu = self.menu_bar.addMenu("脚本(&Scripts)")
-        self.script_clean_mask_action = QAction("清洗 Mask (保留最大连通分量)", self)
-        self.script_clean_mask_action.triggered.connect(self.run_script_clean_mask)
-        scripts_menu.addAction(self.script_clean_mask_action)
-
-        self.script_apply_mask_action = QAction("应用 Mask (图像抠取)...", self)
-        self.script_apply_mask_action.triggered.connect(self.run_script_apply_mask)
-        scripts_menu.addAction(self.script_apply_mask_action)
+        self._populate_scripts_menu(scripts_menu)
         
         view_menu = self.menu_bar.addMenu("视图(&V)")
         self.toggle_path_dock_action = self.path_dock_widget.toggleViewAction()
@@ -322,6 +317,32 @@ class MainWindow(QMainWindow):
         self.settings_action = QAction("打开设置...", self)
         self.settings_action.triggered.connect(self.open_settings_dialog)
         settings_menu.addAction(self.settings_action)
+
+    def _populate_scripts_menu(self, menu):
+        """动态加载 Useful_script/ 目录中的脚本并添加到菜单"""
+        from Useful_script.script_loader import load_scripts
+        
+        # 获取 Useful_script 目录的绝对路径
+        base_path = get_base_path()
+        scripts_dir = os.path.join(base_path, 'Useful_script')
+        
+        scripts = load_scripts(scripts_dir)
+        
+        if not scripts:
+            no_script_action = QAction("(无可用脚本)", self)
+            no_script_action.setEnabled(False)
+            menu.addAction(no_script_action)
+            return
+        
+        for script in scripts:
+            action = QAction(script['name'], self)
+            if script['description']:
+                action.setToolTip(script['description'])
+            
+            # 使用 lambda 捕获当前的 run 函数
+            run_func = script['run']
+            action.triggered.connect(lambda checked, f=run_func: f(self))
+            menu.addAction(action)
 
     def _create_actions_and_shortcuts(self):
         for action in self.active_actions:
