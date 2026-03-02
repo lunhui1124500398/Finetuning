@@ -196,6 +196,20 @@ class SettingsDialog(QDialog):
         output_layout.addRow(QLabel("默认输出源:"), self.script_output_combo)
         layout.addWidget(output_group)
         
+        # 批量处理与工作流设置组
+        batch_group = QGroupBox("批量处理与工作流")
+        batch_layout = QFormLayout(batch_group)
+        
+        self.mask_suffix_input = QLineEdit()
+        self.mask_suffix_input.setPlaceholderText("例如: _mask_new")
+        self.mask_suffix_input.setToolTip(
+            "指定批量导入、回写和 Rg 计算中，处理完成的 Mask 默认存放文件夹后缀。\n"
+            "默认为 _mask_new"
+        )
+        batch_layout.addRow(QLabel("默认 Mask 后缀:"), self.mask_suffix_input)
+        
+        layout.addWidget(batch_group)
+        
         # 对话框设置组
         dialog_group = QGroupBox("对话框设置")
         dialog_layout = QVBoxLayout(dialog_group)
@@ -372,6 +386,10 @@ class SettingsDialog(QDialog):
         output_map = {'save_path': 0, 'custom': 1}
         self.script_output_combo.setCurrentIndex(output_map.get(output_source, 0))
         
+        # 默认 Mask 后缀
+        mask_suffix = self.config.get('Scripts', 'default_mask_suffix', fallback='_mask_new')
+        self.mask_suffix_input.setText(mask_suffix)
+        
         # 显示对话框
         show_dialog = self.config.get('Scripts', 'show_input_dialog', fallback='true').lower() == 'true'
         self.show_script_dialog_checkbox.setChecked(show_dialog)
@@ -413,6 +431,9 @@ class SettingsDialog(QDialog):
         output_index = self.script_output_combo.currentIndex()
         output_map = {0: 'save_path', 1: 'custom'}
         self.config.set('Scripts', 'default_output_source', output_map.get(output_index, 'save_path'))
+        
+        # 默认 Mask 后缀
+        self.config.set('Scripts', 'default_mask_suffix', self.mask_suffix_input.text().strip())
         
         # 显示对话框
         show_dialog = 'true' if self.show_script_dialog_checkbox.isChecked() else 'false'
