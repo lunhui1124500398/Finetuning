@@ -28,9 +28,12 @@ def run(main_window):
     last_path = main_window.model.get_path('original_path') or ""
     start_dir = os.path.dirname(last_path) if last_path else ""
     
+    # 获取用户配置的 origin_suffix
+    origin_suffix = main_window.model.config.get('Scripts', 'default_origin_suffix', fallback='_origin')
+    
     exports_dir = QFileDialog.getExistingDirectory(
         main_window,
-        "选择包含多个 ROI (_origin) 的 Exports 总目录",
+        f"选择包含多个 ROI ({origin_suffix}) 的 Exports 总目录",
         start_dir
     )
     
@@ -38,10 +41,10 @@ def run(main_window):
         return
         
     # 2. 扫描目录
-    rois = RgWorkflowDataCore.identify_rois(exports_dir)
+    rois = RgWorkflowDataCore.identify_rois(exports_dir, target_suffix=origin_suffix)
     
     if not rois:
-        QMessageBox.warning(main_window, "未发现源数据", "选定目录下没有发现以 '_origin' 结尾的 ROI 文件夹。")
+        QMessageBox.warning(main_window, "未发现源数据", f"选定目录下没有发现以 '{origin_suffix}' 结尾的 ROI 文件夹。")
         return
         
     # 3. 弹出窗口选择和配置帧数

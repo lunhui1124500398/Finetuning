@@ -38,10 +38,11 @@ def run(main_window):
         return
         
     # 2. 扫描目录寻找 origin 文件夹
-    rois = RgWorkflowDataCore.identify_rois(exports_dir)
+    origin_suffix = main_window.model.config.get('Scripts', 'default_origin_suffix', fallback='_origin')
+    rois = RgWorkflowDataCore.identify_rois(exports_dir, target_suffix=origin_suffix)
     
     if not rois:
-        QMessageBox.warning(main_window, "未发现源数据", "选定目录下没有发现以 '_origin' 结尾的 ROI 文件夹。")
+        QMessageBox.warning(main_window, "未发现源数据", f"选定目录下没有发现以 '{origin_suffix}' 结尾的 ROI 文件夹。")
         return
         
     # 3. 弹出窗口选择和配置
@@ -64,8 +65,8 @@ def run(main_window):
         origin_dir = exports_path / source_folder
         
         # Determine mask dir
-        if source_folder.endswith("_origin"):
-            target_folder_name = source_folder[:-7] + mask_suffix
+        if source_folder.endswith(origin_suffix):
+            target_folder_name = source_folder[:-len(origin_suffix)] + mask_suffix
         else:
             target_folder_name = source_folder + mask_suffix
             

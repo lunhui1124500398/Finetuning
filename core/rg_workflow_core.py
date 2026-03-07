@@ -15,9 +15,9 @@ class RgWorkflowDataCore:
     """
     
     @staticmethod
-    def identify_rois(exports_dir: str) -> List[Dict]:
+    def identify_rois(exports_dir: str, target_suffix: str = '_origin') -> List[Dict]:
         """
-        Scans an Exports directory and identifies all ROI folders ending with '_origin'.
+        Scans an Exports directory and identifies all ROI folders ending with the target_suffix.
         Returns a list of dicts with ROI information.
         """
         exports_path = Path(exports_dir)
@@ -26,7 +26,7 @@ class RgWorkflowDataCore:
         if not exports_path.is_dir():
             return rois
             
-        roi_dirs = sorted([d for d in exports_path.iterdir() if d.is_dir() and d.name.endswith('_origin')])
+        roi_dirs = sorted([d for d in exports_path.iterdir() if d.is_dir() and d.name.endswith(target_suffix)])
         
         for i, roi_dir in enumerate(roi_dirs):
             # Try to extract the NP suffix or just use a fallback name

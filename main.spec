@@ -15,7 +15,10 @@ a = Analysis(
         'PyQt6.sip',    # PyQt6 经常需要显式导入
         'cv2',
         'numpy',
-        'PIL'
+        'PIL',
+        'ui.widgets.import_dialogs',
+        'core.rg_workflow_core',
+        'ui.widgets.rg_calc_dialogs'
     ],
     hookspath=[],
     hooksconfig={},

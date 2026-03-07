@@ -200,6 +200,14 @@ class SettingsDialog(QDialog):
         batch_group = QGroupBox("批量处理与工作流")
         batch_layout = QFormLayout(batch_group)
         
+        self.origin_suffix_input = QLineEdit()
+        self.origin_suffix_input.setPlaceholderText("例如: _origin, _contrasted")
+        self.origin_suffix_input.setToolTip(
+            "指定批量导入、Rg 计算中扫描和匹配的源文件夹后缀。\n"
+            "默认为 _origin"
+        )
+        batch_layout.addRow(QLabel("默认导入源后缀 (Origin):"), self.origin_suffix_input)
+        
         self.mask_suffix_input = QLineEdit()
         self.mask_suffix_input.setPlaceholderText("例如: _mask_new")
         self.mask_suffix_input.setToolTip(
@@ -386,7 +394,10 @@ class SettingsDialog(QDialog):
         output_map = {'save_path': 0, 'custom': 1}
         self.script_output_combo.setCurrentIndex(output_map.get(output_source, 0))
         
-        # 默认 Mask 后缀
+        # 默认 Origin / Mask 后缀
+        origin_suffix = self.config.get('Scripts', 'default_origin_suffix', fallback='_origin')
+        self.origin_suffix_input.setText(origin_suffix)
+        
         mask_suffix = self.config.get('Scripts', 'default_mask_suffix', fallback='_mask_new')
         self.mask_suffix_input.setText(mask_suffix)
         
@@ -432,7 +443,8 @@ class SettingsDialog(QDialog):
         output_map = {0: 'save_path', 1: 'custom'}
         self.config.set('Scripts', 'default_output_source', output_map.get(output_index, 'save_path'))
         
-        # 默认 Mask 后缀
+        # 默认 Origin / Mask 后缀
+        self.config.set('Scripts', 'default_origin_suffix', self.origin_suffix_input.text().strip())
         self.config.set('Scripts', 'default_mask_suffix', self.mask_suffix_input.text().strip())
         
         # 显示对话框

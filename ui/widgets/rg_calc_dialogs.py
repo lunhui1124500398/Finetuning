@@ -42,7 +42,7 @@ class RgCalculationDialog(QDialog):
         suffix_layout = QHBoxLayout()
         suffix_layout.addWidget(QLabel("对应的 Mask 文件夹后缀: "))
         self.suffix_input = QLineEdit(self.default_suffix)
-        self.suffix_input.setToolTip("程序将通过把源目录的 _origin 替换为此后缀来寻找 Mask。遵循 Settings 中的参数。")
+        self.suffix_input.setToolTip("程序将把源目录配置的具体后缀(如 _origin) 替换为此后缀来寻找对应 Mask。")
         suffix_layout.addWidget(self.suffix_input)
         suffix_layout.addStretch()
         config_layout.addLayout(suffix_layout)
