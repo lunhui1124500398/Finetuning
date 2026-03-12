@@ -2,6 +2,7 @@ import os
 import json
 import shutil
 import csv
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -15,6 +16,11 @@ class RgWorkflowDataCore:
     """
     
     @staticmethod
+    def _natural_sort_key(s: str) -> List:
+        """Helper for natural sorting of strings containing numbers."""
+        return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
+
+    @staticmethod
     def identify_rois(exports_dir: str, target_suffix: str = '_origin') -> List[Dict]:
         """
         Scans an Exports directory and identifies all ROI folders ending with the target_suffix.
@@ -26,7 +32,8 @@ class RgWorkflowDataCore:
         if not exports_path.is_dir():
             return rois
             
-        roi_dirs = sorted([d for d in exports_path.iterdir() if d.is_dir() and d.name.endswith(target_suffix)])
+        roi_dirs = [d for d in exports_path.iterdir() if d.is_dir() and d.name.endswith(target_suffix)]
+        roi_dirs.sort(key=lambda d: RgWorkflowDataCore._natural_sort_key(d.name))
         
         for i, roi_dir in enumerate(roi_dirs):
             # Try to extract the NP suffix or just use a fallback name
@@ -37,7 +44,8 @@ class RgWorkflowDataCore:
                     num_part = parts[1].split("_")[0]
                     original_name = f"NP{num_part}"
                     
-            files = sorted([f.name for f in roi_dir.iterdir() if f.is_file() and f.suffix.lower() in ['.png', '.tif', '.tiff', '.jpg']])
+            files = [f.name for f in roi_dir.iterdir() if f.is_file() and f.suffix.lower() in ['.png', '.tif', '.tiff', '.jpg']]
+            files.sort(key=RgWorkflowDataCore._natural_sort_key)
             
             rois.append({
                 "roi_id": f"ROI{i+1:02d}",
@@ -222,8 +230,10 @@ class RgWorkflowDataCore:
                 all_results.append({"Image_Name": f"ERROR: Missing folders for {roi_name}", "Rg_Value": np.nan})
                 continue
                 
-            origin_files = sorted([f.name for f in origin_dir.iterdir() if f.is_file() and f.suffix.lower() in ['.png', '.jpg', '.tif'] and not f.name.startswith('.')])
-            mask_files = sorted([f.name for f in mask_dir.iterdir() if f.is_file() and f.suffix.lower() in ['.png', '.jpg', '.tif'] and not f.name.startswith('.')])
+            origin_files = [f.name for f in origin_dir.iterdir() if f.is_file() and f.suffix.lower() in ['.png', '.jpg', '.tif'] and not f.name.startswith('.')]
+            origin_files.sort(key=RgWorkflowDataCore._natural_sort_key)
+            mask_files = [f.name for f in mask_dir.iterdir() if f.is_file() and f.suffix.lower() in ['.png', '.jpg', '.tif'] and not f.name.startswith('.')]
+            mask_files.sort(key=RgWorkflowDataCore._natural_sort_key)
             
             count = min(len(origin_files), len(mask_files))
             if max_frames is not None:
