@@ -65,6 +65,7 @@ class ImageCanvas(QGraphicsView):
         self._pan_start_pos = QPointF()
         self._mode_before_drawing = None
         self._erasing_image = None
+        self._loaded_index = -1
         
         self.animation_timer = QTimer(self)
         self.animation_timer.timeout.connect(self._animate_ants)
@@ -112,6 +113,8 @@ class ImageCanvas(QGraphicsView):
         # 在加载新图片之前，如果缩放被锁定，则捕获当前视图的状态
         if self.model.is_zoom_locked:
             self.capture_view_state()
+        if self.model.auto_save and self._loaded_index >= 0 and self._loaded_index != index:
+            self.save_mask_for_index(self._loaded_index)
         
         if index < 0:
             self.scene.clear()
@@ -120,6 +123,7 @@ class ImageCanvas(QGraphicsView):
             self._selection_item.setPen(QPen(Qt.PenStyle.NoPen))
             self.scene.addItem(self._original_item)
             self.scene.addItem(self._selection_item)
+            self._loaded_index = -1
             return
         
         self._contrast_pixmap = None
@@ -195,6 +199,7 @@ class ImageCanvas(QGraphicsView):
         else:
             # 默认行为：适应窗口
             self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._loaded_index = index
         self.scene.update()
 
     @pyqtSlot()
@@ -613,7 +618,9 @@ class ImageCanvas(QGraphicsView):
         self.setFocus()
             
     def save_current_mask(self):
-        index = self.model.current_index
+        return self.save_mask_for_index(self.model.current_index)
+
+    def save_mask_for_index(self, index):
         if index < 0: return False
         save_dir = self.model.get_path('save_path')
         if not save_dir:

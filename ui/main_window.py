@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V9.3(全新自定义+内置脚本)")
+        self.setWindowTitle("手动抠图工具 V9.5.2 (全新自定义+内置脚本)")
         # 获取主屏幕的可用几何尺寸（排除任务栏/Dock等）
         screen = QGuiApplication.primaryScreen()
         available_geometry = screen.availableGeometry()
@@ -367,10 +367,12 @@ class MainWindow(QMainWindow):
             'polygon_mode': lambda: self.model.set_selection_tool("polygon"),
             'erase_mode': lambda: self.model.set_selection_tool("erase"),
             'clear_mask': self.canvas.clear_current_selection,
+            'toggle_mask': self.toggle_mask_visibility,
             'import_files': self.import_images,
             'save_and_next': self.save_and_next,
             'auto_save': lambda: self.model.set_auto_save(not self.model.auto_save),
-            'high_contrast': self.open_effects_chooser,
+            'high_contrast': self.toggle_quick_contrast,
+            'open_effects_panel': self.open_effects_chooser,
             'toggle_image_source': self.model.toggle_image_source,
             'toggle_path_panel':self.toggle_path_dock_action.trigger,
             'toggle_mask_source':self.model.toggle_mask_source
@@ -394,6 +396,30 @@ class MainWindow(QMainWindow):
             display_shortcut = shortcut_str.split(';')[0].split(',')[0].strip()
             menu_text += f" ({display_shortcut})"
         self.toggle_path_dock_action.setText(menu_text)
+        self._update_shortcut_labels()
+
+    def _primary_shortcut_text(self, key_name):
+        shortcut_str = self.model.get_keybinding(key_name)
+        if not shortcut_str:
+            return ""
+        return shortcut_str.split(';')[0].split(',')[0].strip()
+
+    def _update_shortcut_labels(self):
+        panel_shortcut = self._primary_shortcut_text('open_effects_panel')
+        contrast_shortcut = self._primary_shortcut_text('high_contrast')
+
+        panel_text = "\u56fe\u50cf\u6548\u679c\u8c03\u6574"
+        if panel_shortcut:
+            panel_text += f" ({panel_shortcut})"
+        self.effects_button.setText(panel_text)
+
+        tooltip_parts = []
+        if contrast_shortcut:
+            tooltip_parts.append(f"\u5feb\u901f\u5bf9\u6bd4\u5ea6: {contrast_shortcut}")
+        if panel_shortcut:
+            tooltip_parts.append(f"\u6253\u5f00\u9762\u677f: {panel_shortcut}")
+        if tooltip_parts:
+            self.effects_button.setToolTip(" | ".join(tooltip_parts))
 
     @pyqtSlot(str, str)
     def _update_model_path(self, key, new_path):
@@ -475,6 +501,19 @@ class MainWindow(QMainWindow):
         self.save_path_selector.path_selected.connect(
             lambda path: self._update_model_path('save_path', path)
         )
+
+    def toggle_mask_visibility(self):
+        self.model.toggle_mask_visibility()
+
+    def toggle_quick_contrast(self):
+        if self.model.current_index >= 0:
+            self.canvas.push_undo_state_for_effects()
+        self.model.toggle_quick_contrast()
+        if self.effects_dialog is not None:
+            current_base_pixmap = self.canvas._denoised_pixmap if (self.model.show_denoised and self.canvas._denoised_pixmap) else self.canvas._original_pixmap
+            if current_base_pixmap:
+                self.effects_dialog.set_current_pixmap(current_base_pixmap)
+            self.effects_dialog._load_settings_to_ui(self.model.effect_settings)
 
     def run_script_clean_mask(self):
         """调用 BatchProcessor 执行清洗逻辑"""

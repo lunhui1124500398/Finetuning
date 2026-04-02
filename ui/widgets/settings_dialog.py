@@ -13,6 +13,24 @@ from .key_sequence_edit import KeySequenceEdit
 
 class SettingsDialog(QDialog):
     settings_applied = pyqtSignal()
+    KEYBINDING_LABELS = {
+        'next_image': "\u4e0b\u4e00\u5f20 (Next Image)",
+        'prev_image': "\u4e0a\u4e00\u5f20 (Previous Image)",
+        'save': "\u4fdd\u5b58 (Save)",
+        'save_and_next': "\u4fdd\u5b58\u5e76\u4e0b\u4e00\u5f20 (Save And Next)",
+        'draw_mode': "\u5957\u7d22\u5de5\u5177 (Lasso Tool)",
+        'polygon_mode': "\u591a\u8fb9\u5f62\u5de5\u5177 (Polygon Tool)",
+        'erase_mode': "\u6a61\u76ae\u64e6 (Eraser)",
+        'clear_mask': "\u6e05\u9664\u8499\u7248 (Clear Mask)",
+        'toggle_mask': "\u5207\u6362\u8499\u7248\u663e\u793a (Toggle Mask)",
+        'auto_save': "\u81ea\u52a8\u4fdd\u5b58 (Auto Save)",
+        'high_contrast': "\u5feb\u901f\u5bf9\u6bd4\u5ea6 (Quick Contrast)",
+        'open_effects_panel': "\u6253\u5f00\u6548\u679c\u9762\u677f (Open Effects Panel)",
+        'import_files': "\u52a0\u8f7d/\u5237\u65b0\u56fe\u50cf (Import Files)",
+        'toggle_image_source': "\u5207\u6362\u5e95\u56fe\u6765\u6e90 (Toggle Image Source)",
+        'toggle_path_panel': "\u663e\u793a/\u9690\u85cf\u8def\u5f84\u9762\u677f (Toggle Path Panel)",
+        'toggle_mask_source': "\u5207\u6362 Mask \u6765\u6e90 (Toggle Mask Source)",
+    }
 
     def __init__(self, config: configparser.ConfigParser, parent=None):
         super().__init__(parent)
@@ -91,7 +109,7 @@ class SettingsDialog(QDialog):
         
         if self.config.has_section('Keybindings'):
             for key, value in self.config.items('Keybindings'):
-                label_text = key.replace('_', ' ').title()
+                label_text = self.KEYBINDING_LABELS.get(key, key.replace('_', ' ').title())
                 key_edit = KeySequenceEdit()
                 layout.addRow(QLabel(f"{label_text}:"), key_edit)
                 self.key_editors[key] = key_edit
@@ -469,8 +487,8 @@ class SettingsDialog(QDialog):
             'next_image': "D; Right", 'prev_image': "A; Left", 'save': "Ctrl+S",
             'save_and_next': "S", 'draw_mode': "Q", 'erase_mode': "E", 'polygon_mode': "P",
             'clear_mask': "W", 'toggle_mask': "Z", 'auto_save': "X",
-            'high_contrast': "C", 'import_files': "I", 'toggle_image_source': "Space",
-            'toggle_path_panel':"J"
+            'high_contrast': "C", 'open_effects_panel': "Shift+C", 'import_files': "I",
+            'toggle_image_source': "Space", 'toggle_path_panel':"J", 'toggle_mask_source': "T"
         }
         for key, value in defaults_keys.items():
              if key in self.key_editors:

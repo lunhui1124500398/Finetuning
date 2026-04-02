@@ -37,7 +37,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='FinetuningV9.1',
+    name='FinetuningV9.5.2',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -57,5 +57,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Finetuning',
+    name='FinetuningV9.5.2',
 )
