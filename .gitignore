@@ -39,3 +39,5 @@ test_data/
 *.svg
 
 learn/
+docs/
+tests/

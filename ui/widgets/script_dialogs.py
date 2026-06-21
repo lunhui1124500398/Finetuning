@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QButtonGroup)
 from PyQt6.QtCore import Qt
 from .path_selector import PathSelector
+from utils.path_utils import to_filesystem_path
 
 
 class ScriptInputDialog(QDialog):
@@ -58,9 +59,9 @@ class ScriptInputDialog(QDialog):
         self.save_files = []
         self.mask_files = []
         
-        if self.default_save_dir and os.path.isdir(self.default_save_dir):
+        if self.default_save_dir and os.path.isdir(to_filesystem_path(self.default_save_dir)):
             self.save_files = ImageManager.get_image_files(self.default_save_dir)
-        if self.mask_path and os.path.isdir(self.mask_path):
+        if self.mask_path and os.path.isdir(to_filesystem_path(self.mask_path)):
             self.mask_files = ImageManager.get_image_files(self.mask_path)
         
     def init_ui(self):
@@ -236,8 +237,8 @@ class ScriptInputDialog(QDialog):
         mask_path = model.get_path('mask_path') or ""
         
         # 获取文件列表
-        save_files = ImageManager.get_image_files(save_dir) if save_dir and os.path.isdir(save_dir) else []
-        mask_files = ImageManager.get_image_files(mask_path) if mask_path and os.path.isdir(mask_path) else []
+        save_files = ImageManager.get_image_files(save_dir) if save_dir and os.path.isdir(to_filesystem_path(save_dir)) else []
+        mask_files = ImageManager.get_image_files(mask_path) if mask_path and os.path.isdir(to_filesystem_path(mask_path)) else []
         
         # 根据配置选择输入源
         if default_input == 'save_path':

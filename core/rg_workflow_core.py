@@ -9,6 +9,9 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 import cv2
 
+from utils.cv_image_io import load_grayscale
+from utils.path_utils import filesystem_path, to_display_path, to_filesystem_path
+
 class RgWorkflowDataCore:
     """
     Core data logic for the Rg workflow integration between MagicImageJ and Finetuning.
@@ -26,7 +29,7 @@ class RgWorkflowDataCore:
         Scans an Exports directory and identifies all ROI folders ending with the target_suffix.
         Returns a list of dicts with ROI information.
         """
-        exports_path = Path(exports_dir)
+        exports_path = filesystem_path(exports_dir)
         rois = []
         
         if not exports_path.is_dir():
@@ -68,7 +71,7 @@ class RgWorkflowDataCore:
         - selected_frames: int (how many frames to copy, starting from 0)
         - available_files: list of str (all valid image filenames)
         """
-        exports_path = Path(exports_dir)
+        exports_path = filesystem_path(exports_dir)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         staging_dir_name = f"_staging_{timestamp}"
         staging_path = exports_path / staging_dir_name
@@ -100,7 +103,7 @@ class RgWorkflowDataCore:
                 staged_file = origin_path / staged_filename
                 
                 # Copy file
-                shutil.copy2(src_file, staged_file)
+                shutil.copy2(to_filesystem_path(src_file), to_filesystem_path(staged_file))
                 
                 staged_files.append({
                     "staged_name": staged_filename,
@@ -116,32 +119,32 @@ class RgWorkflowDataCore:
             })
             
         manifest = {
-            "source_dir": str(exports_path.absolute()),
+            "source_dir": to_display_path(exports_path.absolute()),
             "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "mask_target_suffix": mask_target_suffix,
             "rois": manifest_rois
         }
         
         manifest_path = staging_path / "manifest.json"
-        with open(manifest_path, 'w', encoding='utf-8') as f:
+        with open(to_filesystem_path(manifest_path), 'w', encoding='utf-8') as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
             
-        return str(staging_path)
+        return to_display_path(staging_path)
 
     @staticmethod
     def is_staging_directory(dir_path: str) -> bool:
         """Checks if a directory is a valid staging directory."""
-        manifest_path = Path(dir_path) / "manifest.json"
+        manifest_path = filesystem_path(dir_path) / "manifest.json"
         return manifest_path.is_file()
 
     @staticmethod
     def read_manifest(dir_path: str) -> Dict:
         """Reads the manifest file from a staging directory."""
-        manifest_path = Path(dir_path) / "manifest.json"
+        manifest_path = filesystem_path(dir_path) / "manifest.json"
         if not manifest_path.is_file():
             raise FileNotFoundError(f"Manifest not found in {dir_path}")
             
-        with open(manifest_path, 'r', encoding='utf-8') as f:
+        with open(to_filesystem_path(manifest_path), 'r', encoding='utf-8') as f:
             return json.load(f)
 
     @staticmethod
@@ -151,13 +154,13 @@ class RgWorkflowDataCore:
         If mask_dir is None, assumes masks are in staging_dir/save_path (from model).
         Returns a dict summarizing the operation.
         """
-        staging_path = Path(staging_dir)
+        staging_path = filesystem_path(staging_dir)
         manifest = RgWorkflowDataCore.read_manifest(staging_dir)
         
         # Determine source dir for masks (where user drew them)
-        mask_source_dir = Path(mask_dir) if mask_dir else staging_path
+        mask_source_dir = filesystem_path(mask_dir) if mask_dir else staging_path
         
-        exports_dir = Path(manifest["source_dir"])
+        exports_dir = filesystem_path(manifest["source_dir"])
         target_suffix = target_suffix_override if target_suffix_override else manifest.get("mask_target_suffix", "_mask_new")
         
         summary = {
@@ -197,7 +200,7 @@ class RgWorkflowDataCore:
                 if mask_file.is_file():
                     target_file = target_dir / original_name
                     try:
-                        shutil.copy2(mask_file, target_file)
+                        shutil.copy2(to_filesystem_path(mask_file), to_filesystem_path(target_file))
                         summary["files_written"] += 1
                     except Exception as e:
                         summary["errors"].append(f"Failed to copy {staged_name} to {target_file}: {str(e)}")
@@ -220,8 +223,8 @@ class RgWorkflowDataCore:
         
         for roi in rois_to_calculate:
             roi_name = roi["roi_name"]
-            origin_dir = Path(roi["origin_dir"])
-            mask_dir = Path(roi["mask_dir"])
+            origin_dir = filesystem_path(roi["origin_dir"])
+            mask_dir = filesystem_path(roi["mask_dir"])
             max_frames = roi.get("max_frames")
             
             roi_results = []
@@ -263,19 +266,19 @@ class RgWorkflowDataCore:
                     
             # 顺便在该 ROI 的 origin 目录的上一级(Exports)生成该单独 ROI 结果
             if roi_results and output_csv:
-                output_path = Path(output_csv)
+                output_path = filesystem_path(output_csv)
                 # output_csv e.g. /path/to/Exports/rg_results.csv
                 # Individual csv e.g. /path/to/Exports/Rg_Results_NP1.csv
                 csv_suffix = roi.get("csv_suffix", "")
                 indiv_csv = output_path.parent / f"Rg_Results_{roi_name}{csv_suffix}.csv"
-                with open(indiv_csv, 'w', newline='', encoding='utf-8') as f:
+                with open(to_filesystem_path(indiv_csv), 'w', newline='', encoding='utf-8') as f:
                     writer = csv.DictWriter(f, fieldnames=["Image_Name", "Rg_Value"])
                     writer.writeheader()
                     writer.writerows(roi_results)
                     
         # Write the combined master CSV
         if all_results and output_csv:
-            with open(output_csv, 'w', newline='', encoding='utf-8') as f:
+            with open(to_filesystem_path(output_csv), 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=["Image_Name", "Rg_Value"])
                 writer.writeheader()
                 writer.writerows(all_results)
@@ -287,7 +290,7 @@ class RgWorkflowDataCore:
         """核心Rg计算逻辑 (Mass-weighted) - adapted from Rg_Calc_GUI.py"""
         try:
             # 读取 Mask
-            binary_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+            binary_img = load_grayscale(mask_path)
             if binary_img is None: return None
             # 自动阈值化，确保非0即255
             _, binary_thresh = cv2.threshold(binary_img, 127, 255, cv2.THRESH_BINARY)
@@ -301,7 +304,7 @@ class RgWorkflowDataCore:
             y_centroid = np.mean(y_idx)
 
             # 读取 Origin
-            origin_img = cv2.imread(origin_path, cv2.IMREAD_GRAYSCALE)
+            origin_img = load_grayscale(origin_path)
             if origin_img is None: return None
 
             # 检查尺寸是否匹配

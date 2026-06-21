@@ -25,27 +25,29 @@ class BatchProcessor:
         """
         total = len(mask_files)
         processed_count = 0
-        
+        skipped_count = 0
+
         for i, file_path in enumerate(mask_files):
-            # 检查取消
             if progress_callback and progress_callback(i, total) is False:
                 break
 
             pixmap = self.image_manager.load_pixmap(file_path)
             if not pixmap or pixmap.isNull():
+                skipped_count += 1
+                print(f"[BatchProcessor] Skipped (load failed): {os.path.basename(file_path)}")
                 continue
 
-            # 核心算法
             cleaned_pixmap = self.image_manager.keep_largest_component(pixmap)
 
-            # 保存
             file_name = os.path.basename(file_path)
             name_no_ext = os.path.splitext(file_name)[0]
             save_full_path = os.path.join(save_dir, name_no_ext + ".png")
             self.image_manager.save_pixmap(cleaned_pixmap, save_full_path)
-            
+
             processed_count += 1
-            
+
+        if skipped_count:
+            print(f"[BatchProcessor] Clean masks done: {processed_count} processed, {skipped_count} skipped.")
         return processed_count
 
     def run_apply_mask_to_images(self, mask_dir, image_dir, save_dir, progress_callback=None):
@@ -60,41 +62,41 @@ class BatchProcessor:
         # 我们以 Mask 为基准去寻找对应的原图
         total = len(mask_files)
         processed_count = 0
-        
-        # 建立原图的索引 (文件名无后缀 -> 完整路径) 以便快速查找
+        skipped_count = 0
+
         image_files = self.image_manager.get_image_files(image_dir)
         image_map = {os.path.splitext(os.path.basename(f))[0]: f for f in image_files}
 
         for i, mask_path in enumerate(mask_files):
             if progress_callback and progress_callback(i, total) is False:
                 break
-            
-            # 1. 解析文件名
+
             mask_filename = os.path.basename(mask_path)
             name_key = os.path.splitext(mask_filename)[0]
-            
-            # 2. 查找对应的原图
+
             image_path = image_map.get(name_key)
             if not image_path:
-                print(f"Skipping {name_key}: No corresponding original image found.")
-                continue
-                
-            # 3. 加载图片
-            mask_pixmap = self.image_manager.load_pixmap(mask_path)
-            orig_pixmap = self.image_manager.load_pixmap(image_path)
-            
-            if not mask_pixmap or not orig_pixmap:
+                skipped_count += 1
+                print(f"[BatchProcessor] Skipped {name_key}: no matching original image.")
                 continue
 
-            # 4. 执行抠图操作 (应用 Alpha 通道)
+            mask_pixmap = self.image_manager.load_pixmap(mask_path)
+            orig_pixmap = self.image_manager.load_pixmap(image_path)
+
+            if not mask_pixmap or not orig_pixmap:
+                skipped_count += 1
+                print(f"[BatchProcessor] Skipped {name_key}: load failed.")
+                continue
+
             result_pixmap = self._apply_alpha_mask(orig_pixmap, mask_pixmap)
-            
-            # 5. 保存
-            save_full_path = os.path.join(save_dir, name_key + ".png") # 强制存为 PNG 以保留透明通道
+
+            save_full_path = os.path.join(save_dir, name_key + ".png")
             self.image_manager.save_pixmap(result_pixmap, save_full_path)
-            
+
             processed_count += 1
-            
+
+        if skipped_count:
+            print(f"[BatchProcessor] Apply mask done: {processed_count} processed, {skipped_count} skipped.")
         return processed_count
 
     def _apply_alpha_mask(self, image_pixmap: QPixmap, mask_pixmap: QPixmap) -> QPixmap:

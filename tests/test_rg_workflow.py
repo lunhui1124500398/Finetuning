@@ -5,6 +5,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 import sys
+import pytest
 
 # Add Finetuning path to sys.path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -38,6 +39,11 @@ def setup_dummy_exports_dir(tmp_path):
     (exports_dir / "processing_log.json").touch()
     
     return str(exports_dir)
+
+
+@pytest.fixture
+def dummy_exports_dir(tmp_path):
+    return setup_dummy_exports_dir(tmp_path)
 
 def test_identify_rois(dummy_exports_dir):
     rois = RgWorkflowDataCore.identify_rois(dummy_exports_dir)

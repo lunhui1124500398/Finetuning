@@ -5,8 +5,10 @@ from PyQt6.QtWidgets import (
     QLabel, QSizePolicy, QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSlot, QSize, QTimer, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 import os
+
+from utils.path_utils import to_filesystem_path
 
 # --- CollapsibleTitleBar (无变动) ---
 class CollapsibleTitleBar(QWidget):
@@ -67,6 +69,8 @@ class PreviewPanel(QWidget):
         self.column_labels = {}
         self.contrast_buttons = {}
         self.column_contrast_state = {key: False for key in self.column_keys}
+        self._manual_seed_indices = set()
+        self._effective_seed_indices = set()
         
         # --- FIX 1 START: 添加一个列表来存储列分割器 ---
         self.column_splitters = []
@@ -169,10 +173,15 @@ class PreviewPanel(QWidget):
     @pyqtSlot(int)
     def update_previews(self, current_index):
         if current_index < 0:
+            self._manual_seed_indices.clear()
+            self._effective_seed_indices.clear()
             self.clear_previews()
             return
 
         # --- FIX 3 START: 保存所有分割器的当前状态 ---
+        self._manual_seed_indices = set(getattr(self.model, "seed_manual_indices", set()))
+        self._effective_seed_indices = set(getattr(self.model, "seed_effective_indices", set()))
+
         main_splitter_state = self.preview_splitter.saveState()
         column_splitter_states = [s.saveState() for s in self.column_splitters]
         # --- FIX 3 END ---
@@ -201,13 +210,17 @@ class PreviewPanel(QWidget):
                 # 使用 scaled 方法时传递 Qt.AspectRatioMode.KeepAspectRatioByExpanding 
                 # 可以更好地填充空间，避免图片周围出现过多空白
                 scaled_pixmap = pixmap.scaled(label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                label.setPixmap(scaled_pixmap)
+                decorated_pixmap = self._decorate_preview_pixmap(scaled_pixmap, image_file_index)
+                label.setPixmap(decorated_pixmap)
+                label.setToolTip(self._preview_tooltip(image_file_index))
             else:
                 label.setText("N/A")
                 label.setPixmap(QPixmap())
+                label.setToolTip("")
         else:
             label.setText("")
             label.setPixmap(QPixmap())
+            label.setToolTip("")
 
     def get_pixmap_for_type(self, index, image_type):
         if not (0 <= index < len(self.model._original_files)): return None
@@ -249,6 +262,51 @@ class PreviewPanel(QWidget):
                 
         return base_pixmap
 
+    def _decorate_preview_pixmap(self, pixmap, index):
+        if not getattr(self.model, "show_preview_seed_badges", True):
+            return pixmap
+        badge_text = ""
+        badge_color = QColor()
+        if index in self._manual_seed_indices:
+            badge_text = "M"
+            badge_color = QColor(255, 170, 0)
+        elif index in self._effective_seed_indices:
+            badge_text = "A"
+            badge_color = QColor(64, 170, 255)
+        if not badge_text:
+            return pixmap
+
+        output = QPixmap(pixmap)
+        painter = QPainter(output)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        badge_w = min(30, max(18, output.width() // 6))
+        badge_h = min(22, max(16, output.height() // 7))
+        margin = 4
+
+        painter.setPen(QPen(QColor(255, 255, 255, 220), 1))
+        painter.setBrush(badge_color)
+        painter.drawRoundedRect(margin, margin, badge_w, badge_h, 4, 4)
+
+        font = QFont()
+        font.setBold(True)
+        font.setPixelSize(max(10, badge_h - 6))
+        painter.setFont(font)
+        painter.setPen(QColor(20, 20, 20))
+        painter.drawText(margin, margin, badge_w, badge_h, int(Qt.AlignmentFlag.AlignCenter), badge_text)
+        painter.end()
+        return output
+
+    def _preview_tooltip(self, index):
+        if not (0 <= index < len(self.model._original_files)):
+            return ""
+        frame_name = os.path.basename(self.model._original_files[index])
+        if index in self._manual_seed_indices:
+            return f"{frame_name}\nSeed 角标: 橙色 M = 手动指定 Seed"
+        if index in self._effective_seed_indices:
+            return f"{frame_name}\nSeed 角标: 蓝色 A = 自动生效 Seed"
+        return frame_name
+
     def _get_saved_mask(self, index):
         # (此函数内部无变动)
         save_dir = self.model.get_path('save_path')
@@ -256,7 +314,7 @@ class PreviewPanel(QWidget):
             original_filename = os.path.basename(self.model._original_files[index])
             mask_filename = os.path.splitext(original_filename)[0] + '.png'
             saved_mask_path = os.path.join(save_dir, mask_filename)
-            if os.path.exists(saved_mask_path):
+            if os.path.exists(to_filesystem_path(saved_mask_path)):
                 return self.image_manager.load_pixmap(saved_mask_path)
         if self.model._mask_files and index < len(self.model._mask_files):
             return self.image_manager.load_pixmap(self.model._mask_files[index])

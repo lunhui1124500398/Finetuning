@@ -2,10 +2,11 @@
 
 import configparser
 import os
-import cv2
 import numpy as np
 from datetime import datetime
 from PyQt6.QtGui import QPixmap, QImage
+from utils.cv_image_io import cv_imwrite
+from utils.path_utils import to_filesystem_path
 
 class Debugger:
     def __init__(self, config_path=None):
@@ -24,7 +25,7 @@ class Debugger:
 
         if self.is_enabled:
             # 如果调试模式开启，确保保存目录存在
-            os.makedirs(self.save_path, exist_ok=True)
+            os.makedirs(to_filesystem_path(self.save_path), exist_ok=True)
             print("--- DEBUG MODE IS ON ---")
             print(f"Debug images will be saved to: {os.path.abspath(self.save_path)}")
 
@@ -48,14 +49,16 @@ class Debugger:
 
         try:
             if isinstance(image_data, QPixmap):
-                image_data.save(full_path, "PNG")
+                image_data.save(to_filesystem_path(full_path), "PNG")
                 self.log(f"Saved QPixmap to '{full_path}'")
             elif isinstance(image_data, QImage):
-                image_data.save(full_path, "PNG")
+                image_data.save(to_filesystem_path(full_path), "PNG")
                 self.log(f"Saved QImage to '{full_path}'")
             elif isinstance(image_data, np.ndarray):
-                cv2.imwrite(full_path, image_data)
-                self.log(f"Saved Numpy array to '{full_path}'")
+                if cv_imwrite(full_path, image_data):
+                    self.log(f"Saved Numpy array to '{full_path}'")
+                else:
+                    self.log(f"Failed to save Numpy array to '{full_path}'")
             else:
                 self.log(f"Error: Unsupported type for saving: {type(image_data)}")
         except Exception as e:

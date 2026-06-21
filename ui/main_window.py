@@ -13,6 +13,7 @@ from PyQt6.QtGui import QAction, QKeySequence, QIcon, QGuiApplication
 
 from core.app_model import AppModel
 from core.image_manager import ImageManager
+from core.semi_auto_mask_tools import build_frame_paths, explicit_seed_indices, resolve_seed_indices, saved_frame_indices
 from .widgets.path_selector import PathSelector
 from .widgets.image_canvas import ImageCanvas
 from .widgets.preview_panel import PreviewPanel
@@ -21,20 +22,25 @@ from .widgets.settings_dialog import SettingsDialog
 from .widgets.effects_dialog import EffectsDialog
 from PyQt6.QtWidgets import QMessageBox # 确保已导入
 from utils.helpers import get_base_path
+from utils.cv_image_io import load_grayscale
+from utils.path_utils import to_filesystem_path
 from core.batch_processor import BatchProcessor
 from ui.widgets.script_dialogs import ApplyMaskScriptDialog
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, session_path: str = ""):
         super().__init__(parent)
-        
+        self._cli_session_path = session_path
+
         self.model = AppModel()
         self.image_manager = ImageManager()
         self.batch_processor = BatchProcessor()
         
         # 【修改 1】初始化一个属性来持有效果对话框的实例
         self.effects_dialog = None
+        self.script_panel_dialog = None
+        self.loaded_scripts = []
 
         self.active_actions = []
 
@@ -112,11 +118,16 @@ class MainWindow(QMainWindow):
         self.mask_path_selector = PathSelector("二值化图路径(参考):")
         self.save_path_selector = PathSelector("保存路径*:")
         self.import_button = QPushButton("加载/刷新图像 (I)")
+        self.manifest_button = QPushButton("从 Manifest 加载 (M)")
+        self.manifest_button.setToolTip("选择 MagicImageJ 导出目录中的 manifest.json，自动填充路径")
         path_layout.addWidget(self.original_path_selector)
         path_layout.addWidget(self.denoised_path_selector)
         path_layout.addWidget(self.mask_path_selector)
         path_layout.addWidget(self.save_path_selector)
-        path_layout.addWidget(self.import_button)
+        import_row = QHBoxLayout()
+        import_row.addWidget(self.import_button)
+        import_row.addWidget(self.manifest_button)
+        path_layout.addLayout(import_row)
         self.path_dock_widget.setWidget(path_widget)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.path_dock_widget)
         
@@ -157,7 +168,8 @@ class MainWindow(QMainWindow):
         display_mode_layout.addWidget(self.contour_radio)
         display_mode_layout.addWidget(self.ants_radio)
 
-        other_options_layout = QHBoxLayout()
+        general_options_layout = QHBoxLayout()
+        seed_options_layout = QHBoxLayout()
         self.mask_invert_checkbox = QCheckBox("反相显示")
         
         self.lock_zoom_checkbox = QCheckBox("固定缩放")
@@ -166,11 +178,28 @@ class MainWindow(QMainWindow):
         self.mask_source_label = QLabel("来源: N/A")
         self.mask_source_label.setObjectName("MaskSourceLabel")
         self.mask_source_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.seed_status_label = QLabel("Seed: N/A")
+        self.seed_status_label.setObjectName("SeedStatusLabel")
+        self.seed_status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.seed_status_label.setMinimumWidth(150)
+        self.seed_visual_mode_button = QPushButton("Seed模式: 平衡")
+        self.seed_visual_mode_button.setToolTip("切换 Seed 显示模式")
+        self.seed_visual_mode_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.preview_seed_badges_checkbox = QCheckBox("预览Seed角标")
+        self.preview_seed_badges_checkbox.setChecked(True)
+        self.preview_seed_badges_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.mask_source_label.setMinimumWidth(190)
         
-        other_options_layout.addWidget(self.lock_zoom_checkbox)
-        other_options_layout.addWidget(self.mask_invert_checkbox)
-        other_options_layout.addStretch() #将标签推到右侧
-        other_options_layout.addWidget(self.mask_source_label)
+        general_options_layout.addWidget(self.lock_zoom_checkbox)
+        general_options_layout.addWidget(self.mask_invert_checkbox)
+        general_options_layout.addStretch()
+
+        seed_options_layout.setSpacing(10)
+        seed_options_layout.addWidget(self.seed_visual_mode_button)
+        seed_options_layout.addWidget(self.preview_seed_badges_checkbox)
+        seed_options_layout.addStretch()
+        seed_options_layout.addWidget(self.seed_status_label)
+        seed_options_layout.addWidget(self.mask_source_label)
 
         self.filename_display_layout = QHBoxLayout()
         self.filename_label_title = QLabel("当前文件:")
@@ -190,7 +219,8 @@ class MainWindow(QMainWindow):
         auto_save_layout.addWidget(self.auto_save_checkbox)
 
         display_layout.addLayout(display_mode_layout)
-        display_layout.addLayout(other_options_layout)
+        display_layout.addLayout(general_options_layout)
+        display_layout.addLayout(seed_options_layout)
         display_layout.addLayout(self.filename_display_layout)
         display_layout.addLayout(auto_save_layout)
 
@@ -319,30 +349,60 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(self.settings_action)
 
     def _populate_scripts_menu(self, menu):
-        """动态加载 Useful_script/ 目录中的脚本并添加到菜单"""
-        from Useful_script.script_loader import load_scripts
+        """动态加载 Useful_script/ 目录中的脚本并按工作流分类。"""
+        from Useful_script.script_loader import group_scripts_by_category, load_scripts
         
         # 获取 Useful_script 目录的绝对路径
         base_path = get_base_path()
         scripts_dir = os.path.join(base_path, 'Useful_script')
         
         scripts = load_scripts(scripts_dir)
+        self.loaded_scripts = scripts
         
         if not scripts:
             no_script_action = QAction("(无可用脚本)", self)
             no_script_action.setEnabled(False)
             menu.addAction(no_script_action)
             return
+
+        panel_action = QAction("打开脚本面板...", self)
+        panel_action.setToolTip("以非模态面板方式按类别浏览和运行脚本")
+        panel_action.triggered.connect(self.open_script_panel)
+        menu.addAction(panel_action)
+        menu.addSeparator()
         
-        for script in scripts:
-            action = QAction(script['name'], self)
-            if script['description']:
-                action.setToolTip(script['description'])
-            
-            # 使用 lambda 捕获当前的 run 函数
-            run_func = script['run']
-            action.triggered.connect(lambda checked, f=run_func: f(self))
-            menu.addAction(action)
+        for category, category_scripts in group_scripts_by_category(scripts):
+            category_menu = menu.addMenu(category)
+            for script in category_scripts:
+                action = QAction(script['name'], self)
+                if script['description']:
+                    action.setToolTip(script['description'])
+                
+                action.triggered.connect(lambda checked, s=script: self._run_script_info(s))
+                category_menu.addAction(action)
+
+    def _run_script_info(self, script):
+        run_func = script.get('run')
+        if callable(run_func):
+            run_func(self)
+
+    def open_script_panel(self):
+        from Useful_script.script_loader import load_scripts
+        from ui.widgets.script_panel import ScriptPanelDialog
+
+        base_path = get_base_path()
+        scripts_dir = os.path.join(base_path, 'Useful_script')
+        self.loaded_scripts = load_scripts(scripts_dir)
+
+        if self.script_panel_dialog is None:
+            self.script_panel_dialog = ScriptPanelDialog(self.loaded_scripts, self)
+            self.script_panel_dialog.run_script_requested.connect(self._run_script_info)
+        else:
+            self.script_panel_dialog.set_scripts(self.loaded_scripts)
+
+        self.script_panel_dialog.show()
+        self.script_panel_dialog.raise_()
+        self.script_panel_dialog.activateWindow()
 
     def _create_actions_and_shortcuts(self):
         for action in self.active_actions:
@@ -370,12 +430,16 @@ class MainWindow(QMainWindow):
             'toggle_mask': self.toggle_mask_visibility,
             'import_files': self.import_images,
             'save_and_next': self.save_and_next,
+            'next_binary_dataset': self.load_next_binary_dataset,
+            'previous_binary_dataset': self.load_previous_binary_dataset,
+            'skip_current_binary_dataset': self.skip_current_binary_dataset,
             'auto_save': lambda: self.model.set_auto_save(not self.model.auto_save),
             'high_contrast': self.toggle_quick_contrast,
             'open_effects_panel': self.open_effects_chooser,
             'toggle_image_source': self.model.toggle_image_source,
             'toggle_path_panel':self.toggle_path_dock_action.trigger,
-            'toggle_mask_source':self.model.toggle_mask_source
+            'toggle_mask_source':self.model.toggle_mask_source,
+            'cycle_seed_visual_mode': self.cycle_seed_visual_mode,
         }
         
         for key, func in key_map.items():
@@ -407,6 +471,8 @@ class MainWindow(QMainWindow):
     def _update_shortcut_labels(self):
         panel_shortcut = self._primary_shortcut_text('open_effects_panel')
         contrast_shortcut = self._primary_shortcut_text('high_contrast')
+        mode_shortcut = self._primary_shortcut_text('cycle_seed_visual_mode')
+        mask_toggle_shortcut = self._primary_shortcut_text('toggle_mask')
 
         panel_text = "\u56fe\u50cf\u6548\u679c\u8c03\u6574"
         if panel_shortcut:
@@ -420,6 +486,73 @@ class MainWindow(QMainWindow):
             tooltip_parts.append(f"\u6253\u5f00\u9762\u677f: {panel_shortcut}")
         if tooltip_parts:
             self.effects_button.setToolTip(" | ".join(tooltip_parts))
+        if mask_toggle_shortcut:
+            shortcut_hint = f"快捷切换蚂蚁线/隐藏: {mask_toggle_shortcut}"
+            self.hide_radio.setToolTip(shortcut_hint)
+            self.ants_radio.setToolTip(shortcut_hint)
+        else:
+            self.hide_radio.setToolTip("")
+            self.ants_radio.setToolTip("")
+        self._update_seed_visual_mode_button_text(mode_shortcut)
+
+    def _seed_visual_mode_label(self, mode):
+        return {
+            "fast": "极速",
+            "balanced": "平衡",
+            "info": "信息",
+        }.get(mode, "平衡")
+
+    def _update_seed_visual_mode_button_text(self, shortcut_text=None):
+        mode = getattr(self.model, "seed_visual_mode", "balanced")
+        label = self._seed_visual_mode_label(mode)
+        text = f"Seed模式: {label}"
+        if shortcut_text:
+            text += f" ({shortcut_text})"
+        self.seed_visual_mode_button.setText(text)
+        self.seed_visual_mode_button.setToolTip(
+            "极速: 仅显示当前帧 Seed 文本\n"
+            "平衡: 显示当前帧文本 + 底部滑条彩线\n"
+            "信息: 额外显示预览角标"
+        )
+
+    def apply_seed_visual_mode(self, mode, persist=True):
+        valid_modes = {"fast", "balanced", "info"}
+        if mode not in valid_modes:
+            mode = "balanced"
+
+        show_slider_markers = mode in {"balanced", "info"}
+        show_preview_badges = mode == "info"
+
+        self.model.show_slider_seed_markers = show_slider_markers
+        self.model.show_preview_seed_badges = show_preview_badges
+        self.model.set_seed_visual_mode(mode)
+
+        self.preview_seed_badges_checkbox.blockSignals(True)
+        self.preview_seed_badges_checkbox.setChecked(show_preview_badges)
+        self.preview_seed_badges_checkbox.blockSignals(False)
+        self.preview_seed_badges_checkbox.setEnabled(mode == "info")
+
+        if self.model.config.has_section("Preview"):
+            self.model.config.set("Preview", "seed_visual_mode", mode)
+
+        self._update_seed_visual_mode_button_text(
+            self._primary_shortcut_text('cycle_seed_visual_mode')
+        )
+        self.refresh_seed_cache()
+        self.update_seed_status_label()
+        self.preview_panel.update_previews(self.model.current_index)
+
+        if persist:
+            self._safe_save_config()
+
+    def cycle_seed_visual_mode(self):
+        order = ["fast", "balanced", "info"]
+        current = getattr(self.model, "seed_visual_mode", "balanced")
+        try:
+            next_mode = order[(order.index(current) + 1) % len(order)]
+        except ValueError:
+            next_mode = "balanced"
+        self.apply_seed_visual_mode(next_mode, persist=True)
 
     @pyqtSlot(str, str)
     def _update_model_path(self, key, new_path):
@@ -430,6 +563,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         self.import_button.clicked.connect(self.import_images)
+        self.manifest_button.clicked.connect(self.load_from_manifest)
         self.prev_button.clicked.connect(self.model.decrement_index)
         self.next_button.clicked.connect(self.model.increment_index)
         self.progress_slider.slider.valueChanged.connect(self.model.set_current_index)
@@ -463,6 +597,9 @@ class MainWindow(QMainWindow):
         self.effects_button.clicked.connect(self.open_effects_chooser)
         self.mask_invert_checkbox.toggled.connect(self.model.set_mask_invert)
         self.lock_zoom_checkbox.toggled.connect(self.model.set_zoom_locked)
+        self.seed_visual_mode_button.clicked.connect(self.cycle_seed_visual_mode)
+        self.preview_seed_badges_checkbox.toggled.connect(lambda checked: setattr(self.model, "show_preview_seed_badges", checked))
+        self.preview_seed_badges_checkbox.toggled.connect(self._on_preview_seed_badges_toggled)
 
         self.model.index_changed.connect(self.on_index_changed)
         self.model.files_changed.connect(self.on_files_changed)
@@ -471,6 +608,11 @@ class MainWindow(QMainWindow):
         self.model.auto_save_changed.connect(self.auto_save_checkbox.setChecked)
         self.model.effects_changed.connect(self.canvas.on_effects_changed)
         self.model.display_mode_changed.connect(self.on_display_mode_changed)
+        self.model.seed_visual_mode_changed.connect(
+            lambda _: self._update_seed_visual_mode_button_text(
+                self._primary_shortcut_text('cycle_seed_visual_mode')
+            )
+        )
         
         self.model.zoom_lock_changed.connect(self.lock_zoom_checkbox.setChecked)
 
@@ -484,6 +626,8 @@ class MainWindow(QMainWindow):
             )
         # 更换加载源时，更新标签文本
         self.model.mask_source_changed.connect(self.update_mask_source_label)
+        self.model.mask_saved.connect(lambda index: self.refresh_seed_cache(index))
+        self.model.mask_saved.connect(lambda _index: self.update_seed_status_label())
 
         self.model.image_source_changed.connect(self.canvas.on_image_source_changed)
         self.model.mask_updated.connect(lambda: self.preview_panel.update_previews(self.model.current_index))
@@ -504,6 +648,17 @@ class MainWindow(QMainWindow):
 
     def toggle_mask_visibility(self):
         self.model.toggle_mask_visibility()
+
+    def _on_preview_seed_badges_toggled(self, checked):
+        current_mode = getattr(self.model, "seed_visual_mode", "balanced")
+        if checked and current_mode != "info":
+            self.apply_seed_visual_mode("info", persist=True)
+            return
+        if not checked and current_mode == "info":
+            self.apply_seed_visual_mode("balanced", persist=True)
+            return
+        self.model.show_preview_seed_badges = checked
+        self.preview_panel.update_previews(self.model.current_index)
 
     def toggle_quick_contrast(self):
         if self.model.current_index >= 0:
@@ -574,9 +729,9 @@ class MainWindow(QMainWindow):
         mask_path, img_path, save_path = dialog.get_paths()
         
         # 确保保存目录存在
-        if not os.path.exists(save_path):
+        if not os.path.exists(to_filesystem_path(save_path)):
             try:
-                os.makedirs(save_path)
+                os.makedirs(to_filesystem_path(save_path), exist_ok=True)
             except OSError as e:
                 QMessageBox.critical(self, "错误", f"无法创建保存目录:\n{e}")
                 return
@@ -670,12 +825,21 @@ class MainWindow(QMainWindow):
         elif mode == "ants":
             self.ants_radio.setChecked(True)
 
+    def _update_navigation_controls(self):
+        total_files = len(getattr(self.model, "_original_files", []))
+        index = self.model.current_index
+        has_valid_frame = total_files > 0 and 0 <= index < total_files
+        self.prev_button.setEnabled(has_valid_frame and index > 0)
+        self.next_button.setEnabled(has_valid_frame and index < total_files - 1)
+
     @pyqtSlot(int)
     def on_index_changed(self, index):
+        self._update_navigation_controls()
         if index < 0: 
             # 如果索引无效 (例如没有文件)，清空标签并返回
             self.filename_label_value.setText("N/A")
             self.filename_label_value.setToolTip("")
+            self.seed_status_label.setText("Seed: N/A")
             # 确保滑块标签也更新
             self.progress_slider.set_value(index)
             self.progress_slider.update_label()
@@ -697,6 +861,7 @@ class MainWindow(QMainWindow):
             self.filename_label_value.setText("N/A")
             self.filename_label_value.setToolTip("")
         
+        self.update_seed_status_label()
         self.canvas.load_image(index)
         # [CRITICAL FIX] 如果效果对话框是打开的，必须把新图片传给它，并强制应用当前的滑块值
         if self.effects_dialog and self.effects_dialog.isVisible():
@@ -717,17 +882,21 @@ class MainWindow(QMainWindow):
             self.progress_slider.set_range(0, total_files - 1)
             self.on_display_mode_changed(self.model.display_mode)
             self.update_mask_source_label(self.model.load_from_save_path) #首次加载时设置标签初始状态
+            self.refresh_seed_cache()
             self.on_index_changed(self.model.current_index)
         else:
             self.progress_slider.set_range(0, -1)
+            self.progress_slider.clear_seed_markers()
             self.preview_panel.clear_previews()
             self.canvas.load_image(-1)
+            self.seed_status_label.setText("Seed: N/A")
             self.mask_source_label.setText("来源: N/A") # 清空标签
             
             self.filename_label_value.setText("N/A")
             self.filename_label_value.setToolTip("")
             
             QMessageBox.information(self, "提示", "在指定路径下未找到图像文件。")
+        self._update_navigation_controls()
     
     # --- START: 新增槽函数 ---
     @pyqtSlot(bool)
@@ -740,11 +909,149 @@ class MainWindow(QMainWindow):
             self.mask_source_label.setText("来源: 二值 (Mask)")
             self.mask_source_label.setToolTip("当前优先加载 'Mask Path' (按 T 键切换)")
     
+    def _clear_seed_cache(self):
+        self.model.seed_manual_indices = set()
+        self.model.seed_effective_indices = set()
+        self.model.seed_changed_indices = set()
+        self.model.seed_saved_indices = set()
+        self.model.seed_auto_generated_indices = set()
+        self.model.seed_mode = "none"
+        self.progress_slider.clear_seed_markers()
+
+    def refresh_seed_cache(self, updated_index=None):
+        save_dir = self.model.get_path('save_path')
+        original_files = getattr(self.model, '_original_files', [])
+        if not save_dir or not original_files:
+            self._clear_seed_cache()
+            return
+        if updated_index is not None and isinstance(updated_index, int):
+            try:
+                saved_indices = set(getattr(self.model, "seed_saved_indices", set()))
+                manual_indices = set(getattr(self.model, "seed_manual_indices", set()))
+                changed_indices = set(getattr(self.model, "seed_changed_indices", set()))
+                auto_generated_indices = set(getattr(self.model, "seed_auto_generated_indices", set()))
+                original_path = self.model._original_files[updated_index]
+                frame_name = os.path.splitext(os.path.basename(original_path))[0] + ".png"
+                save_path = os.path.join(save_dir, frame_name)
+                mask_path = self.model._mask_files[updated_index] if updated_index < len(self.model._mask_files) else None
+                if os.path.exists(to_filesystem_path(save_path)):
+                    saved_indices.add(updated_index)
+                else:
+                    saved_indices.discard(updated_index)
+                auto_generated_indices.discard(updated_index)
+                source = load_grayscale(mask_path) if mask_path else None
+                saved = load_grayscale(save_path)
+                is_changed = False
+                if source is not None and saved is not None:
+                    is_changed = int((source != saved).sum()) > 0
+                if not manual_indices:
+                    if is_changed:
+                        changed_indices.add(updated_index)
+                    else:
+                        changed_indices.discard(updated_index)
+                if manual_indices:
+                    effective_indices = set(manual_indices)
+                    mode = "explicit"
+                elif changed_indices:
+                    effective_indices = set(changed_indices)
+                    mode = "edited"
+                elif saved_indices:
+                    effective_indices = set(saved_indices)
+                    mode = "saved"
+                else:
+                    effective_indices = set()
+                    mode = "none"
+                self.model.seed_manual_indices = manual_indices
+                self.model.seed_effective_indices = effective_indices
+                self.model.seed_changed_indices = changed_indices
+                self.model.seed_saved_indices = saved_indices
+                self.model.seed_auto_generated_indices = auto_generated_indices
+                self.model.seed_mode = mode
+                if getattr(self.model, "show_slider_seed_markers", True):
+                    self.progress_slider.set_seed_markers(manual_indices, effective_indices)
+                else:
+                    self.progress_slider.clear_seed_markers()
+                return
+            except Exception as exc:
+                print(f"[refresh_seed_cache] Incremental update failed for index {updated_index}: {exc}")
+        try:
+            frames = build_frame_paths(self.model._original_files, self.model._mask_files, save_dir)
+            manual_indices = set(explicit_seed_indices(frames))
+            effective_indices, mode = resolve_seed_indices(frames, min_changed_pixels=1)
+            non_auto_saved = set(saved_frame_indices(frames))
+            saved_indices = {frame.index for frame in frames if frame.has_saved_mask}
+            changed_indices = set(effective_indices) if mode == "edited" else set()
+        except Exception:
+            self._clear_seed_cache()
+            return
+        self.model.seed_manual_indices = manual_indices
+        self.model.seed_effective_indices = set(effective_indices)
+        self.model.seed_changed_indices = changed_indices
+        self.model.seed_saved_indices = saved_indices
+        self.model.seed_auto_generated_indices = saved_indices - non_auto_saved
+        self.model.seed_mode = mode
+        if getattr(self.model, "show_slider_seed_markers", True):
+            self.progress_slider.set_seed_markers(manual_indices, set(effective_indices))
+        else:
+            self.progress_slider.clear_seed_markers()
+
+    def update_seed_status_label(self):
+        index = self.model.current_index
+        if index < 0 or not self.model._original_files:
+            self.seed_status_label.setText("Seed: N/A")
+            self.seed_status_label.setToolTip("当前未加载可判断的 seed 状态")
+            return
+        manual_indices = set(getattr(self.model, "seed_manual_indices", set()))
+        effective_indices = set(getattr(self.model, "seed_effective_indices", set()))
+        auto_generated_indices = set(getattr(self.model, "seed_auto_generated_indices", set()))
+        saved_indices = set(getattr(self.model, "seed_saved_indices", set()))
+        mode = str(getattr(self.model, "seed_mode", "none"))
+
+        if index in manual_indices:
+            self.seed_status_label.setText("Seed: 手动指定")
+            self.seed_status_label.setToolTip("当前帧被手动指定为 seed，追踪和边界脚本会优先使用它。")
+        elif index in effective_indices and mode == "edited":
+            self.seed_status_label.setText("Seed: 自动使用")
+            self.seed_status_label.setToolTip("当前帧会被脚本自动当作 seed 使用。")
+        elif index in effective_indices and mode == "saved":
+            self.seed_status_label.setText("Seed: 自动候选")
+            self.seed_status_label.setToolTip("当前帧属于已保存候选，脚本在没有更好 seed 时会使用它。")
+        elif index in auto_generated_indices:
+            self.seed_status_label.setText("Seed: 自动结果")
+            self.seed_status_label.setToolTip("当前帧是脚本自动生成结果，默认不会再反向作为 seed。")
+        elif index in saved_indices:
+            self.seed_status_label.setText("Seed: 已保存")
+            self.seed_status_label.setToolTip("当前帧已保存，但不是当前生效中的 seed。")
+        else:
+            self.seed_status_label.setText("Seed: 否")
+            self.seed_status_label.setToolTip("当前帧不是生效中的 seed。")
+
     def save_and_next(self):
         if self.model.current_index < 0:
             return
         if self.canvas.save_current_mask():
             self.model.increment_index()
+
+    def load_next_binary_dataset(self):
+        try:
+            from Useful_script import binary_queue_next
+            binary_queue_next.run(self)
+        except Exception as exc:
+            QMessageBox.critical(self, "切换下一个 Binary 失败", str(exc))
+
+    def load_previous_binary_dataset(self):
+        try:
+            from Useful_script import binary_queue_previous
+            binary_queue_previous.run(self)
+        except Exception as exc:
+            QMessageBox.critical(self, "切换上一个 Binary 失败", str(exc))
+
+    def skip_current_binary_dataset(self):
+        try:
+            from Useful_script import binary_queue_skip
+            binary_queue_skip.run(self)
+        except Exception as exc:
+            QMessageBox.critical(self, "跳过当前 Binary 失败", str(exc))
     
     def apply_stylesheet(self):
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -781,13 +1088,128 @@ class MainWindow(QMainWindow):
         self.canvas.update_selection_display()
         self.preview_panel.update_previews(self.model.current_index)
 
+    def _try_restore_binary_queue_session(self):
+        auto_restore = self.model.config.getboolean(
+            "Scripts",
+            "auto_restore_binary_queue_session",
+            fallback=True,
+        )
+        if not auto_restore:
+            return False
+
+        try:
+            from core.binary_queue_core import BinaryQueueCore
+        except Exception:
+            return False
+
+        session_path = BinaryQueueCore.load_session_from_config(self)
+        if not session_path:
+            return False
+
+        if not os.path.exists(to_filesystem_path(session_path)):
+            BinaryQueueCore.clear_session_from_config(self)
+            return False
+
+        try:
+            BinaryQueueCore.load_current_or_next_dataset(self, session_path)
+            return True
+        except Exception as exc:
+            if "already completed" in str(exc).lower():
+                return False
+            QMessageBox.warning(
+                self,
+                "恢复 Binary 会话失败",
+                f"启动时无法恢复上次 Binary 会话：\n{exc}",
+            )
+            return False
+
     def _load_initial_settings(self):
         self.apply_stylesheet()
+        self.apply_seed_visual_mode(
+            self.model.config.get("Preview", "seed_visual_mode", fallback="balanced"),
+            persist=False,
+        )
         self.original_path_selector.set_path(self.model.get_path('original_path'))
         self.denoised_path_selector.set_path(self.model.get_path('denoised_path'))
         self.mask_path_selector.set_path(self.model.get_path('mask_path'))
         save_path = self.model.get_path('save_path') or self.model.get_path('mask_path')
         self.save_path_selector.set_path(save_path)
+        if self._cli_session_path and os.path.isfile(
+            to_filesystem_path(self._cli_session_path)
+        ):
+            try:
+                from core.binary_queue_core import BinaryQueueCore
+                BinaryQueueCore.save_session_to_config(self, self._cli_session_path)
+                BinaryQueueCore.load_current_or_next_dataset(self, self._cli_session_path)
+                return
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    "加载会话失败",
+                    f"无法加载命令行指定的会话：\n{self._cli_session_path}\n\n{exc}",
+                )
+        if self._try_restore_binary_queue_session():
+            return
+        self.import_images()
+
+    def load_from_manifest(self):
+        """Load paths from a MagicImageJ manifest.json file."""
+        from PyQt6.QtWidgets import QFileDialog, QInputDialog
+        import json as _json
+
+        manifest_path, _ = QFileDialog.getOpenFileName(
+            self, "选择 manifest.json", "", "JSON (*.json)"
+        )
+        if not manifest_path:
+            return
+
+        try:
+            with open(to_filesystem_path(manifest_path), 'r', encoding='utf-8') as f:
+                manifest = _json.load(f)
+        except Exception as e:
+            QMessageBox.critical(self, "加载失败", f"无法读取 manifest.json:\n{e}")
+            return
+
+        if manifest.get("type") != "MagicImageJ_Export":
+            QMessageBox.warning(self, "格式错误", "该文件不是 MagicImageJ 导出的 manifest。")
+            return
+
+        particles = manifest.get("particles", [])
+        if not particles:
+            QMessageBox.warning(self, "无数据", "manifest 中没有粒子数据。")
+            return
+
+        labels = [f"NP{p['id']} — {p.get('frame_range', '?')}" for p in particles]
+        chosen, ok = QInputDialog.getItem(
+            self, "选择粒子", "请选择要加载的粒子:", labels, 0, False
+        )
+        if not ok:
+            return
+
+        idx = labels.index(chosen)
+        particle = particles[idx]
+        paths = particle.get("paths", {})
+        export_dir = os.path.dirname(to_filesystem_path(manifest_path))
+
+        origin = os.path.join(export_dir, paths.get("origin", ""))
+        mask = os.path.join(export_dir, paths.get("mask", ""))
+        mask_refined = os.path.join(export_dir, paths.get("mask_refined", ""))
+
+        if origin and os.path.isdir(origin):
+            self.original_path_selector.set_path(origin)
+        if mask and os.path.isdir(mask):
+            self.mask_path_selector.set_path(mask)
+        if mask_refined:
+            os.makedirs(mask_refined, exist_ok=True)
+            self.save_path_selector.set_path(mask_refined)
+
+        contrasted = os.path.join(export_dir, paths.get("contrasted", ""))
+        if contrasted and os.path.isdir(contrasted):
+            self.denoised_path_selector.set_path(contrasted)
+
+        ds = manifest.get("dataset", {})
+        info = f"{ds.get('substance', '')} {ds.get('dataset_id', '')} — {particle.get('label', '')}"
+        print(f"[Manifest] Loaded particle: {info}")
         self.import_images()
 
     def import_images(self):
@@ -795,20 +1217,20 @@ class MainWindow(QMainWindow):
         save_path = self.save_path_selector.get_path()
 
         # 检查路径是否为空或者目录不存在
-        if not original_path or not os.path.isdir(original_path):
+        if not original_path or not os.path.isdir(to_filesystem_path(original_path)):
             QMessageBox.warning(self, "路径错误", "“原图路径”为空或无效，可能是第一次打开没有配置，请继续。")
             # 可以选择性地弹出文件选择对话框，引导用户操作
             # self.original_path_selector.select_directory() 
             return
 
-        if not save_path or not os.path.isdir(save_path):
+        if not save_path or not os.path.isdir(to_filesystem_path(save_path)):
             # 如果保存路径不存在，可以询问用户是否创建
             if save_path: # 路径不为空但目录不存在
                 reply = QMessageBox.question(self, "创建目录？", f"路径 “{save_path}” 不存在。\n是否要创建它？",
                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 if reply == QMessageBox.StandardButton.Yes:
                     try:
-                        os.makedirs(save_path, exist_ok=True)
+                        os.makedirs(to_filesystem_path(save_path), exist_ok=True)
                     except Exception as e:
                         QMessageBox.critical(self, "创建失败", f"无法创建目录：{e}")
                         return
@@ -832,14 +1254,38 @@ class MainWindow(QMainWindow):
             self.right_splitter.restoreState(self.initial_layout_states['right_splitter'])
             self.path_dock_widget.setVisible(True)
 
+    def _safe_save_config(self):
+        """Write config atomically: write to temp file, then rename to prevent corruption."""
+        import tempfile
+        config_path = self.model.config_path
+        try:
+            dir_name = os.path.dirname(config_path)
+            fd, tmp_path = tempfile.mkstemp(suffix='.tmp', dir=dir_name)
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as tmp_file:
+                    self.model.config.write(tmp_file)
+                os.replace(tmp_path, config_path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except Exception as exc:
+            print(f"[Config] Atomic save failed, falling back to direct write: {exc}")
+            try:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    self.model.config.write(f)
+            except Exception as e2:
+                print(f"[Config] Direct write also failed: {e2}")
+
     def closeEvent(self, event):
         try:
             self.model.config['Paths']['original_path'] = self.original_path_selector.get_path()
             self.model.config['Paths']['denoised_path'] = self.denoised_path_selector.get_path()
             self.model.config['Paths']['mask_path'] = self.mask_path_selector.get_path()
             self.model.config['Paths']['save_path'] = self.save_path_selector.get_path()
-            with open(self.model.config_path, 'w', encoding='utf-8') as configfile:
-                self.model.config.write(configfile)
+            self._safe_save_config()
         except Exception as e:
             print(f"关闭时保存配置文件失败: {e}")
         super().closeEvent(event)

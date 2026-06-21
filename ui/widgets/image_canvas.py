@@ -7,7 +7,10 @@ from PyQt6.QtGui import (
     QPolygonF, QImage, QPainterPathStroker
 )
 import os
+from pathlib import Path
 from utils.debugger import debugger
+from utils.path_utils import to_filesystem_path
+from core.semi_auto_mask_tools import mark_manual_saved_mask
 
 # --- create_cursor 函数 (无变动) ---
 def create_cursor(text):
@@ -113,6 +116,8 @@ class ImageCanvas(QGraphicsView):
         # 在加载新图片之前，如果缩放被锁定，则捕获当前视图的状态
         if self.model.is_zoom_locked:
             self.capture_view_state()
+        if self._loaded_index >= len(self.model._original_files):
+            self._loaded_index = -1
         if self.model.auto_save and self._loaded_index >= 0 and self._loaded_index != index:
             self.save_mask_for_index(self._loaded_index)
         
@@ -162,7 +167,7 @@ class ImageCanvas(QGraphicsView):
         path_to_load = None
         if self.model.load_from_save_path:
             # 优先加载 'save_path' (已存效果)
-            if saved_mask_path and os.path.exists(saved_mask_path):
+            if saved_mask_path and os.path.exists(to_filesystem_path(saved_mask_path)):
                 path_to_load = saved_mask_path
             elif binary_mask_path:
                 path_to_load = binary_mask_path # 回退
@@ -170,7 +175,7 @@ class ImageCanvas(QGraphicsView):
             # 优先加载 'mask_path' (二值化图)
             if binary_mask_path:
                 path_to_load = binary_mask_path
-            elif saved_mask_path and os.path.exists(saved_mask_path):
+            elif saved_mask_path and os.path.exists(to_filesystem_path(saved_mask_path)):
                 path_to_load = saved_mask_path # 回退
 
         if path_to_load:
@@ -317,6 +322,7 @@ class ImageCanvas(QGraphicsView):
                     self._temp_drawing_points.append(scene_pos)
         elif self._current_tool == 'erase':
             self._erasing_image = self.get_pixmap_from_path().toImage()
+            self._erasing_base_pixmap = self._render_display_pixmap()
             self._apply_eraser(scene_pos)
         
         self.scene.update()
@@ -434,7 +440,6 @@ class ImageCanvas(QGraphicsView):
 
     def _apply_eraser(self, scene_pos: QPointF):
         if self._erasing_image is None: return
-        # size = self.model.config['Drawing'].getint('eraser_size', 10)
         size = self.model.eraser_size
         radius = size / 2.0
         painter = QPainter(self._erasing_image)
@@ -442,8 +447,8 @@ class ImageCanvas(QGraphicsView):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(scene_pos, radius, radius)
         painter.end()
-        
-        base_pixmap = self._original_item.pixmap()
+
+        base_pixmap = getattr(self, '_erasing_base_pixmap', None) or self._render_display_pixmap()
         if not base_pixmap: return
         temp_mask_pixmap = QPixmap.fromImage(self._erasing_image)
         preview_pixmap = self.image_manager.create_overlay_pixmap(base_pixmap, temp_mask_pixmap, 'contour', (0,255,0,128), 1, self.model.mask_invert)
@@ -475,27 +480,24 @@ class ImageCanvas(QGraphicsView):
                 self._mode_before_drawing = None
             self._is_drawing_selection = False
             self._erasing_image = None
+            self._erasing_base_pixmap = None
             self.scene.update()
 
-    # --- START: 新增取消方法 ---
     def _cancel_drawing(self):
         """取消当前的绘制或擦除操作。"""
         print("Drawing cancelled by user.")
         try:
-            # 恢复到操作前的视觉状态
             self.update_selection_display()
         finally:
-            # 恢复显示模式
             if self._mode_before_drawing is not None:
                 self.model.set_display_mode(self._mode_before_drawing)
                 self._mode_before_drawing = None
 
-            # 清理所有状态
             self._is_drawing_selection = False
             self._temp_drawing_points = []
             self._erasing_image = None
-            self.scene.update() # 清除所有前景绘制（如辅助线）
-    # --- END: 新增取消方法 ---
+            self._erasing_base_pixmap = None
+            self.scene.update()
     
     def drawForeground(self, painter, rect):
         # ... (此方法内部无变化) ...
@@ -575,22 +577,29 @@ class ImageCanvas(QGraphicsView):
     #     self._contrast_pixmap = None  # 切换高对比度时，使缓存失效
     #     self.update_selection_display()
 
-    def update_display_pixmap(self):
-        """根据模型状态（原图/去噪/高对比度）更新显示的底图。"""
-        # 1. 根据 self.model.show_denoised 决定基础图像
+    def _current_base_pixmap(self):
         active_base_pixmap = self._original_pixmap
         if self.model.show_denoised and self._denoised_pixmap:
             active_base_pixmap = self._denoised_pixmap
+        return active_base_pixmap
 
-       # 2. 检查是否有效果需要应用
-        settings = self.model.effect_settings
-        if settings.get('manual_enabled', False) or settings.get('algo_enabled', False):
-            # 应用效果
-            effects_pixmap = self.image_manager.apply_image_effects(active_base_pixmap, settings)
-            self._original_item.setPixmap(effects_pixmap)
-        else:
-            # 否则直接显示基础图像
-            self._original_item.setPixmap(active_base_pixmap)
+    def _render_display_pixmap(self, settings=None):
+        active_base_pixmap = self._current_base_pixmap()
+        if not active_base_pixmap:
+            return active_base_pixmap
+        if getattr(self.model, "effects_bypassed", False):
+            return active_base_pixmap
+        if settings is None:
+            settings = getattr(self.model, "preview_effect_settings", self.model.effect_settings)
+        if self.model.settings_have_active_effects(settings):
+            return self.image_manager.apply_image_effects(active_base_pixmap, settings)
+        return active_base_pixmap
+
+    def update_display_pixmap(self):
+        """根据模型状态（原图/去噪/高对比度）更新显示的底图。"""
+        display_pixmap = self._render_display_pixmap()
+        if display_pixmap:
+            self._original_item.setPixmap(display_pixmap)
 
     @pyqtSlot()
     def on_image_source_changed(self):
@@ -609,12 +618,21 @@ class ImageCanvas(QGraphicsView):
         self.update_cursor()
 
     def clear_current_selection(self):
-        if not self._selection_path.isEmpty():
+        should_persist_empty = False
+        had_selection = not self._selection_path.isEmpty()
+        if had_selection:
             self.push_undo_state()
             self._selection_path = QPainterPath()
             self.model.mask_updated.emit()
-            if self.model.auto_save:
-                self.save_current_mask()
+            should_persist_empty = True
+        elif self._original_pixmap is not None and not self._original_pixmap.isNull():
+            # Even when the mask is already empty, treat an explicit clear action
+            # as a deliberate "this frame should be empty" confirmation.
+            self._selection_path = QPainterPath()
+            self.model.mask_updated.emit()
+            should_persist_empty = True
+        if should_persist_empty or self.model.auto_save:
+            self.save_current_mask()
         self.setFocus()
             
     def save_current_mask(self):
@@ -622,6 +640,9 @@ class ImageCanvas(QGraphicsView):
 
     def save_mask_for_index(self, index):
         if index < 0: return False
+        if index >= len(self.model._original_files):
+            print(f"Skip saving mask: index {index} is out of range for current file list.")
+            return False
         save_dir = self.model.get_path('save_path')
         if not save_dir:
             QMessageBox.warning(self, "保存失败", "请在路径设置中指定有效的“保存路径”！")
@@ -635,6 +656,8 @@ class ImageCanvas(QGraphicsView):
             img.invertPixels()
             pixmap_to_save = QPixmap.fromImage(img)
         self.image_manager.save_pixmap(pixmap_to_save, save_path)
+        mark_manual_saved_mask(Path(save_path))
+        self.model.mask_saved.emit(index)
         print(f"Mask saved to {save_path}")
         self.setFocus()
         return True
@@ -662,12 +685,10 @@ class ImageCanvas(QGraphicsView):
     @pyqtSlot()
     def on_preview_effects_changed(self):
         """当预览效果参数改变时，实时刷新画布"""
-        active_base_pixmap = self._denoised_pixmap if self.model.show_denoised and self._denoised_pixmap else self._original_pixmap
-        if not active_base_pixmap:
-            return
-
         preview_settings = self.model.preview_effect_settings
-        preview_pixmap = self.image_manager.apply_image_effects(active_base_pixmap, preview_settings)
+        preview_pixmap = self._render_display_pixmap(preview_settings)
+        if not preview_pixmap:
+            return
 
         # 直接更新显示的pixmap，但不更新缓存
         self._original_item.setPixmap(preview_pixmap)

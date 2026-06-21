@@ -17,6 +17,8 @@ except ImportError:
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog, QApplication
 from PyQt6.QtCore import Qt
 
+from utils.cv_image_io import cv_imwrite, load_grayscale
+
 # --- Script Metadata ---
 SCRIPT_NAME = "批量填洞 (Fill Holes)"
 SCRIPT_DESCRIPTION = "批量填补 Mask 图像中的内部孔洞 (形态学方法)"
@@ -30,8 +32,8 @@ def fill_holes_in_image(image_path: str) -> np.ndarray:
         print("Scipy not found, skipping hole filling.")
         return None
 
-    # 读取为灰度图
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    # 读取为灰度图。不要直接用 cv2.imread，Windows 中文/长路径会失败。
+    img = load_grayscale(image_path)
     if img is None:
         return None
     
@@ -116,8 +118,8 @@ def run(main_window):
         # 保存到 output_dir，保持原文件名
         filename = os.path.basename(mask_path)
         save_path = os.path.join(output_dir, filename)
-        cv2.imwrite(save_path, filled)
-        processed += 1
+        if cv_imwrite(save_path, filled):
+            processed += 1
         
         progress.setValue(i + 1)
         QApplication.processEvents()

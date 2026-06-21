@@ -16,6 +16,7 @@ class AppModel(QObject):
     files_changed = pyqtSignal(int)
     index_changed = pyqtSignal(int)
     mask_updated = pyqtSignal()
+    mask_saved = pyqtSignal(int)
     tool_changed = pyqtSignal(str)
     auto_save_changed = pyqtSignal(bool)
     eraser_size_changed = pyqtSignal(int)
@@ -26,17 +27,21 @@ class AppModel(QObject):
     mask_source_changed = pyqtSignal(bool)
     effects_changed = pyqtSignal()
     preview_effects_changed = pyqtSignal()
+    seed_visual_mode_changed = pyqtSignal(str)
 
     DEFAULT_KEYBINDINGS = {
         "next_image": "D; Right",
         "prev_image": "A; Left",
         "save": "Ctrl+S",
         "save_and_next": "S",
+        "next_binary_dataset": "N",
+        "previous_binary_dataset": "B",
+        "skip_current_binary_dataset": "Ctrl+Shift+K",
         "draw_mode": "Q",
         "polygon_mode": "P",
         "erase_mode": "E",
         "clear_mask": "W",
-        "toggle_mask": "Z",
+        "toggle_mask": "H",
         "auto_save": "X",
         "high_contrast": "C",
         "open_effects_panel": "Shift+C",
@@ -44,6 +49,7 @@ class AppModel(QObject):
         "toggle_image_source": "Space",
         "toggle_path_panel": "J",
         "toggle_mask_source": "T",
+        "cycle_seed_visual_mode": "F6",
     }
 
     def __init__(self, config_path=None):
@@ -88,7 +94,11 @@ class AppModel(QObject):
         self._last_v_scroll = 0
         self._display_mode = "ants"
         self._show_denoised = False
+        self._effects_bypassed = False
         self._load_from_save_path = True
+        self.show_slider_seed_markers = True
+        self.show_preview_seed_badges = True
+        self.seed_visual_mode = "balanced"
 
         self.load_config()
         self._preview_effect_settings = self._effect_settings.copy()
@@ -98,8 +108,10 @@ class AppModel(QObject):
         if not read_files:
             print(f"Warning: config file not found or empty: {self.config_path}")
         self._ensure_default_keybindings()
+        self._ensure_preview_settings()
         self.config_loaded.emit()
         self._eraser_size = self.config.getint("Drawing", "eraser_size", fallback=10)
+        self.seed_visual_mode = self.config.get("Preview", "seed_visual_mode", fallback="balanced")
 
     def _ensure_default_keybindings(self):
         """Backfill shortcut entries so older configs can edit new actions."""
@@ -108,6 +120,12 @@ class AppModel(QObject):
         for key, value in self.DEFAULT_KEYBINDINGS.items():
             if not self.config.has_option("Keybindings", key):
                 self.config.set("Keybindings", key, value)
+
+    def _ensure_preview_settings(self):
+        if not self.config.has_section("Preview"):
+            self.config.add_section("Preview")
+        if not self.config.has_option("Preview", "seed_visual_mode"):
+            self.config.set("Preview", "seed_visual_mode", "balanced")
 
     def push_undo_state(self, index, path: QPainterPath):
         if index not in self._undo_stack:
@@ -128,16 +146,29 @@ class AppModel(QObject):
         return self._current_index
 
     def set_current_index(self, index):
+        if index == -1:
+            if self._current_index != -1:
+                self._current_index = -1
+                self.index_changed.emit(-1)
+            return
         if 0 <= index < len(self._original_files):
             if self._current_index != index:
                 self._current_index = index
                 self.index_changed.emit(index)
 
     def increment_index(self):
-        self.set_current_index(self._current_index + 1)
+        if not self._original_files:
+            self.set_current_index(-1)
+            return
+        next_index = 0 if self._current_index < 0 else self._current_index + 1
+        self.set_current_index(min(next_index, len(self._original_files) - 1))
 
     def decrement_index(self):
-        self.set_current_index(self._current_index - 1)
+        if not self._original_files:
+            self.set_current_index(-1)
+            return
+        previous_index = 0 if self._current_index <= 0 else self._current_index - 1
+        self.set_current_index(previous_index)
 
     def update_file_lists(self, original_path, denoised_path, mask_path):
         from core.image_manager import ImageManager
@@ -147,11 +178,13 @@ class AppModel(QObject):
         self._mask_files = ImageManager.get_image_files(mask_path) if mask_path else []
 
         total_files = len(self._original_files)
+        self._current_index = 0 if total_files > 0 else -1
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        if not self._denoised_files:
+            self._show_denoised = False
+        self._effects_bypassed = False
         self.files_changed.emit(total_files)
-        if total_files > 0:
-            self.set_current_index(0)
-        else:
-            self.set_current_index(-1)
 
     @property
     def selection_tool(self):
@@ -183,7 +216,7 @@ class AppModel(QObject):
             self.display_mode_changed.emit(mode)
 
     def toggle_mask_visibility(self):
-        """Quick-toggle between ants and hidden mask."""
+        """Quick-toggle between marching ants and hidden mask."""
         self.set_display_mode("hide" if self._display_mode == "ants" else "ants")
 
     @property
@@ -209,9 +242,31 @@ class AppModel(QObject):
     def effect_settings(self):
         return self._effect_settings
 
+    @staticmethod
+    def settings_have_active_effects(settings: dict) -> bool:
+        if not settings:
+            return False
+        if settings.get("algo_enabled", False):
+            return True
+        if not settings.get("manual_enabled", False):
+            return False
+        return any([
+            settings.get("manual_min", 0) != 0,
+            settings.get("manual_max", 255) != 255,
+            settings.get("manual_brightness", 0) != 0,
+            settings.get("manual_contrast", 0) != 0,
+            abs(float(settings.get("manual_gamma", 1.0)) - 1.0) > 1e-6,
+        ])
+
+    def has_active_effects(self, include_preview: bool = True) -> bool:
+        if self.settings_have_active_effects(self._effect_settings):
+            return True
+        return include_preview and self.settings_have_active_effects(self._preview_effect_settings)
+
     def update_effect_settings(self, settings: dict):
         self._effect_settings.update(settings)
         self._preview_effect_settings = self._effect_settings.copy()
+        self._effects_bypassed = False
         print("Applied image effects:", self._effect_settings)
         self.effects_changed.emit()
 
@@ -225,6 +280,7 @@ class AppModel(QObject):
             "clahe_grid_size": self._effect_settings.get("clahe_grid_size", 8),
         })
         self._preview_effect_settings = self._effect_settings.copy()
+        self._effects_bypassed = False
         self.effects_changed.emit()
         return enable_algo
 
@@ -234,10 +290,14 @@ class AppModel(QObject):
 
     def update_preview_effect_settings(self, preview_settings: dict):
         self._preview_effect_settings.update(preview_settings)
+        if not self.has_active_effects(include_preview=True):
+            self._effects_bypassed = False
         self.preview_effects_changed.emit()
 
     def revert_preview_to_last_settings(self):
         self._preview_effect_settings = self._effect_settings.copy()
+        if not self.has_active_effects(include_preview=True):
+            self._effects_bypassed = False
         self.preview_effects_changed.emit()
 
     @property
@@ -253,7 +313,17 @@ class AppModel(QObject):
     def show_denoised(self):
         return self._show_denoised
 
+    @property
+    def effects_bypassed(self):
+        return self._effects_bypassed
+
     def toggle_image_source(self):
+        if self.has_active_effects(include_preview=True):
+            self._effects_bypassed = not self._effects_bypassed
+            state = "raw" if self._effects_bypassed else "adjusted"
+            print(f"Image effects comparison toggled. Showing {state} image.")
+            self.image_source_changed.emit()
+            return
         if self._denoised_files:
             self._show_denoised = not self._show_denoised
             print(f"Image source toggled. show_denoised={self._show_denoised}")
@@ -274,6 +344,14 @@ class AppModel(QObject):
 
     def get_keybinding(self, key):
         return self.config["Keybindings"].get(key, "")
+
+    def set_seed_visual_mode(self, mode: str):
+        valid_modes = {"fast", "balanced", "info"}
+        if mode not in valid_modes:
+            return
+        if self.seed_visual_mode != mode:
+            self.seed_visual_mode = mode
+            self.seed_visual_mode_changed.emit(mode)
 
     @property
     def is_zoom_locked(self):

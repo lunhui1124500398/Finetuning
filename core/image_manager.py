@@ -1,10 +1,12 @@
 import os
+
 import cv2
 import numpy as np
 from PIL import Image, ImageQt
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBitmap, QPainterPath, QPolygonF
 from PyQt6.QtCore import Qt, QPointF
 from utils.debugger import debugger
+from utils.path_utils import to_display_path, to_filesystem_path
 
 from functools import lru_cache
 
@@ -38,18 +40,19 @@ class ImageManager:
 
     @staticmethod
     def get_image_files(directory):
-        if not directory or not os.path.isdir(directory):
+        if not directory or not os.path.isdir(to_filesystem_path(directory)):
             return []
         supported_formats = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff')
-        return sorted([os.path.join(directory, f) for f in os.listdir(directory) if f.lower().endswith(supported_formats)])
+        display_dir = to_display_path(directory)
+        return sorted([os.path.join(display_dir, f) for f in os.listdir(to_filesystem_path(directory)) if f.lower().endswith(supported_formats)])
 
     @staticmethod
     def load_pixmap(file_path):
-        if not file_path or not os.path.exists(file_path):
+        if not file_path or not os.path.exists(to_filesystem_path(file_path)):
             return None
         # 使用 Pillow 加载，以支持更多格式, 然后转换为 QPixmap
         try:
-            image = Image.open(file_path)
+            image = Image.open(to_filesystem_path(file_path))
             if image.mode != "RGBA":
                 image = image.convert("RGBA")
             qimage = ImageQt.ImageQt(image)
@@ -277,8 +280,8 @@ class ImageManager:
         if not pixmap or not file_path:
             return
         # 确保目录存在
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        pixmap.save(file_path, 'PNG')
+        os.makedirs(to_filesystem_path(os.path.dirname(file_path)), exist_ok=True)
+        pixmap.save(to_filesystem_path(file_path), 'PNG')
     
     # --- START: 新增方法，用于将轮廓图转换为路径 ---
     @staticmethod

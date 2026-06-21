@@ -8,6 +8,7 @@
 import os
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog, QApplication, QInputDialog
 from PyQt6.QtCore import Qt
+from utils.path_utils import to_filesystem_path
 
 # --- Script Metadata ---
 SCRIPT_NAME = "2. 派发 Mask (写回原目录)..."
@@ -28,9 +29,9 @@ def run(main_window):
     save_dir = model.get_path('save_path')
     mask_dir = model.get_path('mask_path')
     
-    default_source = save_dir if (save_dir and os.path.exists(save_dir)) else (mask_dir or current_dir)
+    default_source = save_dir if (save_dir and os.path.exists(to_filesystem_path(save_dir))) else (mask_dir or current_dir)
     
-    if not current_dir or not os.path.exists(current_dir):
+    if not current_dir or not os.path.exists(to_filesystem_path(current_dir)):
         QMessageBox.warning(main_window, "工作区无效", "当前没有设置有效的工作区路径。")
         return
         

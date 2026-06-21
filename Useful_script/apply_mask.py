@@ -7,6 +7,7 @@
 import os
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog, QApplication, QDialog
 from PyQt6.QtCore import Qt
+from utils.path_utils import to_filesystem_path
 
 # --- Script Metadata ---
 SCRIPT_NAME = "应用 Mask (图像抠取)..."
@@ -40,9 +41,9 @@ def run(main_window):
     mask_path, img_path, save_path = dialog.get_paths()
     
     # 确保保存目录存在
-    if not os.path.exists(save_path):
+    if not os.path.exists(to_filesystem_path(save_path)):
         try:
-            os.makedirs(save_path)
+            os.makedirs(to_filesystem_path(save_path), exist_ok=True)
         except OSError as e:
             QMessageBox.critical(main_window, "错误", f"无法创建保存目录:\n{e}")
             return

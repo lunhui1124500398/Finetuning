@@ -18,11 +18,14 @@ class SettingsDialog(QDialog):
         'prev_image': "\u4e0a\u4e00\u5f20 (Previous Image)",
         'save': "\u4fdd\u5b58 (Save)",
         'save_and_next': "\u4fdd\u5b58\u5e76\u4e0b\u4e00\u5f20 (Save And Next)",
+        'next_binary_dataset': "\u4e0b\u4e00\u4e2a Binary \u6570\u636e\u96c6 (Next Binary Dataset)",
+        'previous_binary_dataset': "\u4e0a\u4e00\u4e2a Binary \u6570\u636e\u96c6 (Previous Binary Dataset)",
+        'skip_current_binary_dataset': "\u8df3\u8fc7\u5f53\u524d Binary \u6570\u636e\u96c6 (Skip Current Binary Dataset)",
         'draw_mode': "\u5957\u7d22\u5de5\u5177 (Lasso Tool)",
         'polygon_mode': "\u591a\u8fb9\u5f62\u5de5\u5177 (Polygon Tool)",
         'erase_mode': "\u6a61\u76ae\u64e6 (Eraser)",
         'clear_mask': "\u6e05\u9664\u8499\u7248 (Clear Mask)",
-        'toggle_mask': "\u5207\u6362\u8499\u7248\u663e\u793a (Toggle Mask)",
+        'toggle_mask': "蚂蚁线 / 隐藏快速切换 (Toggle Ants / Hide)",
         'auto_save': "\u81ea\u52a8\u4fdd\u5b58 (Auto Save)",
         'high_contrast': "\u5feb\u901f\u5bf9\u6bd4\u5ea6 (Quick Contrast)",
         'open_effects_panel': "\u6253\u5f00\u6548\u679c\u9762\u677f (Open Effects Panel)",
@@ -248,6 +251,12 @@ class SettingsDialog(QDialog):
         )
         self.show_script_dialog_checkbox.setChecked(True)
         dialog_layout.addWidget(self.show_script_dialog_checkbox)
+        self.confirm_before_skip_binary_checkbox = QCheckBox("跳过当前 Binary 前弹确认框")
+        self.confirm_before_skip_binary_checkbox.setToolTip(
+            "勾选后，执行“跳过当前 Binary 数据集”前会先弹出确认框，防止误跳过。"
+        )
+        self.confirm_before_skip_binary_checkbox.setChecked(True)
+        dialog_layout.addWidget(self.confirm_before_skip_binary_checkbox)
         layout.addWidget(dialog_group)
         
         # 说明
@@ -422,6 +431,12 @@ class SettingsDialog(QDialog):
         # 显示对话框
         show_dialog = self.config.get('Scripts', 'show_input_dialog', fallback='true').lower() == 'true'
         self.show_script_dialog_checkbox.setChecked(show_dialog)
+        confirm_before_skip = self.config.get(
+            'Scripts',
+            'confirm_before_skip_binary_dataset',
+            fallback='true',
+        ).lower() == 'true'
+        self.confirm_before_skip_binary_checkbox.setChecked(confirm_before_skip)
 
     def save_settings(self):
         # 保存快捷键
@@ -468,6 +483,8 @@ class SettingsDialog(QDialog):
         # 显示对话框
         show_dialog = 'true' if self.show_script_dialog_checkbox.isChecked() else 'false'
         self.config.set('Scripts', 'show_input_dialog', show_dialog)
+        confirm_before_skip = 'true' if self.confirm_before_skip_binary_checkbox.isChecked() else 'false'
+        self.config.set('Scripts', 'confirm_before_skip_binary_dataset', confirm_before_skip)
 
     def confirm_restore_defaults(self):
         reply = QMessageBox.question(self, '恢复默认设置',
@@ -485,8 +502,11 @@ class SettingsDialog(QDialog):
         # 恢复默认快捷键
         defaults_keys = {
             'next_image': "D; Right", 'prev_image': "A; Left", 'save': "Ctrl+S",
-            'save_and_next': "S", 'draw_mode': "Q", 'erase_mode': "E", 'polygon_mode': "P",
-            'clear_mask': "W", 'toggle_mask': "Z", 'auto_save': "X",
+            'save_and_next': "S", 'next_binary_dataset': "N",
+            'previous_binary_dataset': "B",
+            'skip_current_binary_dataset': "Ctrl+Shift+K",
+            'draw_mode': "Q", 'erase_mode': "E", 'polygon_mode': "P",
+            'clear_mask': "W", 'toggle_mask': "H", 'auto_save': "X",
             'high_contrast': "C", 'open_effects_panel': "Shift+C", 'import_files': "I",
             'toggle_image_source': "Space", 'toggle_path_panel':"J", 'toggle_mask_source': "T"
         }
