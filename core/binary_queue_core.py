@@ -660,3 +660,9 @@ class BinaryQueueCore:
             refined_count=refined,
             meta={"by": "finetuning"},
         )
+        # [Revolution D4] best-effort: 精修回写后刷新该数据集 overview.html (tools 已在 sys.path)
+        try:
+            from overview_refresh import regenerate_overview_async
+            regenerate_overview_async(manifest_path.parent)
+        except Exception:
+            pass
