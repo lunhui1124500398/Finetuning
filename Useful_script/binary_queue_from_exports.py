@@ -22,6 +22,44 @@ def _short_session_name(dataset_count: int) -> str:
     return f"exports_binary_session_{dataset_count}_{timestamp}.json"
 
 
+def canonical_save_suffix(save_suffix: str) -> str:
+    """Map the deprecated "_mask_new" save suffix to the canonical "_mask_refined".
+
+    The session 17/18 pipeline reorg standardized refined masks to live in
+    <Exports>/_masks/<name>_mask_refined. Old configs may still carry a stale
+    "_mask_new" (or "-mask_new") value; migrating it keeps Finetuning output in
+    the same folder the overview / manifest / Unet++ retrain read from.
+    """
+    if save_suffix and save_suffix.strip().lstrip("_-").lower() == "mask_new":
+        return "_mask_refined"
+    return save_suffix
+
+
+# Suffix meaning "an output/save mask folder", used to tell an accidentally
+# carried-over save value apart from a genuine initial-read suffix.
+_SAVE_SUFFIX_SENTINELS = {"mask_new"}
+
+
+def initial_mask_suffix(config) -> str:
+    """Initial-read mask folder suffix for the Exports Binary flow (default ``_mask``).
+
+    Reads the dedicated ``default_binary_exports_mask_suffix`` key. This is kept
+    separate from ``default_mask_suffix`` on purpose: that shared key means the
+    *output/save* suffix for the import / Rg-calc / write-back tools and the
+    Settings dialog, so overloading it here silently changed those tools' save
+    target (and vice versa). For configs predating this split, a non-save-style
+    ``default_mask_suffix`` value is carried over once so a customized initial
+    suffix isn't lost, while a save-style value (e.g. ``_mask_new``) is ignored.
+    """
+    dedicated = config.get("Scripts", "default_binary_exports_mask_suffix", fallback="").strip()
+    if dedicated:
+        return dedicated
+    legacy = config.get("Scripts", "default_mask_suffix", fallback="").strip()
+    if legacy and legacy.lstrip("_-").lower() not in _SAVE_SUFFIX_SENTINELS:
+        return legacy
+    return "_mask"
+
+
 def _start_dir_from_model(main_window) -> str:
     model = main_window.model
     candidates = [
@@ -58,8 +96,17 @@ def run(main_window):
         return
 
     origin_suffix = model.config.get("Scripts", "default_origin_suffix", fallback="_contrasted")
-    mask_suffix = model.config.get("Scripts", "default_mask_suffix", fallback="_origin_mask_new")
-    save_suffix = model.config.get("Scripts", "default_binary_exports_save_suffix", fallback="_origin_mask_refined")
+    # Initial-read mask suffix uses its own key (default_binary_exports_mask_suffix),
+    # decoupled from the shared default_mask_suffix which the import / Rg-calc /
+    # write-back tools use as an *output* suffix.
+    mask_suffix = initial_mask_suffix(model.config)
+    save_suffix = model.config.get("Scripts", "default_binary_exports_save_suffix", fallback="_mask_refined")
+    # Canonical pipeline layout (session 17/18 reorg): initial masks live in
+    # <Exports>/_masks/<name>_mask and refined masks in <Exports>/_masks/<name>_mask_refined.
+    # Migrate the deprecated "_mask_new" save suffix so old configs land in the
+    # same *_mask_refined folder the rest of the pipeline (overview / manifest /
+    # Unet++ retrain) reads from, instead of creating a stray *_mask_new folder.
+    save_suffix = canonical_save_suffix(save_suffix)
 
     dialog = BinaryExportsSessionDialog(
         exports_dir,
@@ -79,7 +126,10 @@ def run(main_window):
         if not model.config.has_section("Scripts"):
             model.config.add_section("Scripts")
         model.config.set("Scripts", "default_origin_suffix", origin_suffix)
-        model.config.set("Scripts", "default_mask_suffix", mask_suffix)
+        # Persist the initial-read suffix to the dedicated key only — never write
+        # back into the shared default_mask_suffix (that would clobber the save
+        # suffix the import / Rg-calc / write-back tools read from that key).
+        model.config.set("Scripts", "default_binary_exports_mask_suffix", mask_suffix)
         model.config.set("Scripts", "default_binary_exports_save_suffix", save_suffix)
         with open(model.config_path, "w", encoding="utf-8") as handle:
             model.config.write(handle)

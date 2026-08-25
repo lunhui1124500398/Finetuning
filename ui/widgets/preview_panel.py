@@ -110,7 +110,9 @@ class PreviewPanel(QWidget):
                 label = QLabel()
                 label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-                label.setMinimumSize(50, 50)
+                # 40 而不是 50: 3 行缩略图 + 标题条的最小高度直接决定了下面控制面板
+                # 最多能拿到多少 —— 窗口按默认尺寸启动时就差这几十像素 (2026-07-29)
+                label.setMinimumSize(40, 40)
                 label.setStyleSheet("border: 1px solid gray;")
                 image_panel_layout.addWidget(label)
                 self.column_labels[key].append(label)

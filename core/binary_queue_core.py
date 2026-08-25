@@ -131,16 +131,22 @@ class BinaryQueueCore:
         require_mask_dir: bool = True,
     ) -> List[Dict]:
         """
-        Discover Binary queue datasets in a flat MagicImageJ Exports directory.
+        Discover Binary queue datasets in a MagicImageJ / Inference Exports directory.
 
-        This layout uses sibling folders such as:
+        Origin folders are flat siblings, e.g.:
             ROI001_contrasted
-            ROI001_origin_mask_new
-            ROI001_origin_mask_refined
+        Masks may live either as flat siblings (legacy layout):
+            ROI001_mask
+            ROI001_mask_refined
+        or, since the 2026-05-30 Inference reorg, inside a _masks/ subfolder:
+            _masks/ROI001_mask
+            _masks/ROI001_mask_refined
+        The _masks/ location is preferred when present, with a fall back to the
+        flat sibling layout for older datasets.
 
         The contrasted folder is loaded as original images, mask_suffix is used
         as the read-only initial binary mask, and save_suffix is the editable
-        output folder for this Finetuning session.
+        output folder (saved next to the resolved mask) for this Finetuning session.
         """
         exports_path = filesystem_path(exports_dir)
         datasets: List[Dict] = []
@@ -176,11 +182,30 @@ class BinaryQueueCore:
                 if not matches_dataset and not matches_source_folder:
                     continue
 
-            mask_dir = exports_path / BinaryQueueCore.related_folder_name(origin_dir.name, origin_suffix, mask_suffix)
+            mask_folder = BinaryQueueCore.related_folder_name(origin_dir.name, origin_suffix, mask_suffix)
+            save_folder = BinaryQueueCore.related_folder_name(origin_dir.name, origin_suffix, save_suffix)
+
+            # [Reorg 2026-05-30] Inference now writes masks into an <Exports>/_masks/ subfolder
+            # instead of as flat siblings of the origin folders. Prefer that location and fall
+            # back to the legacy flat layout so older datasets keep working.
+            masks_subdir = exports_path / "_masks"
+            subfolder_mask = masks_subdir / mask_folder
+            flat_mask = exports_path / mask_folder
+            if subfolder_mask.is_dir():
+                mask_dir = subfolder_mask
+            elif flat_mask.is_dir():
+                mask_dir = flat_mask
+            else:
+                # Neither exists yet: follow the new layout when a _masks/ dir is present,
+                # otherwise keep the legacy flat layout.
+                mask_dir = (masks_subdir if masks_subdir.is_dir() else exports_path) / mask_folder
+
             if require_mask_dir and not mask_dir.is_dir():
                 continue
 
-            save_dir = exports_path / BinaryQueueCore.related_folder_name(origin_dir.name, origin_suffix, save_suffix)
+            # Save the refined output next to the resolved mask (same parent), matching the
+            # Inference GUI behaviour (精修与 mask 同放 _masks/).
+            save_dir = mask_dir.parent / save_folder
             dataset = BinaryQueueCore._dataset_dict(exports_path.name, dataset_name, origin_dir, mask_dir, save_dir)
             dataset.update(
                 {

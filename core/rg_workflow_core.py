@@ -61,7 +61,7 @@ class RgWorkflowDataCore:
         return rois
 
     @staticmethod
-    def create_staging_environment(exports_dir: str, selected_rois: List[Dict], mask_target_suffix: str = "_mask_new") -> str:
+    def create_staging_environment(exports_dir: str, selected_rois: List[Dict], mask_target_suffix: str = "_mask_refined") -> str:
         """
         Creates a staging environment from the selected ROIs and their frame counts.
         selected_rois should be a list of dicts, each containing:
@@ -161,7 +161,7 @@ class RgWorkflowDataCore:
         mask_source_dir = filesystem_path(mask_dir) if mask_dir else staging_path
         
         exports_dir = filesystem_path(manifest["source_dir"])
-        target_suffix = target_suffix_override if target_suffix_override else manifest.get("mask_target_suffix", "_mask_new")
+        target_suffix = target_suffix_override if target_suffix_override else manifest.get("mask_target_suffix", "_mask_refined")
         
         summary = {
             "total_rois": len(manifest["rois"]),

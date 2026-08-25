@@ -3,12 +3,12 @@
 import os
 import sys
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QCheckBox, QFrame, QSplitter, QMessageBox, QDockWidget,
     QButtonGroup, QRadioButton, QLabel, QGroupBox, QDialog, QSlider, QSizePolicy,
-    QProgressDialog
+    QProgressDialog, QComboBox, QScrollArea
 )
-from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence, QIcon, QGuiApplication
 
 from core.app_model import AppModel
@@ -26,6 +26,14 @@ from utils.cv_image_io import load_grayscale
 from utils.path_utils import to_filesystem_path
 from core.batch_processor import BatchProcessor
 from ui.widgets.script_dialogs import ApplyMaskScriptDialog
+
+
+# Seed 相关 UI 暂时下线 (2026-07-29)。当前流程用不到 Seed 模式, 而它在"显示选项"里
+# 独占一整行, 路径面板展开时把右侧控制面板挤爆。
+# 底层逻辑 (refresh_seed_cache / update_seed_status_label / Useful_script/seed_manager.py)
+# 一行没动, 把下面这个常量改回 True 即可整行复原, 快捷键和配置都还在。
+# 关闭时 seed 显示模式被钉在 "fast": 不画滑条彩线, 不画预览角标 (否则用户无从关掉它们)。
+SHOW_SEED_CONTROLS = False
 
 
 class MainWindow(QMainWindow):
@@ -85,7 +93,7 @@ class MainWindow(QMainWindow):
             print(f"Warning: Application icon not found at '{icon_path}'")
 
     def init_ui(self):
-        self.setWindowTitle("手动抠图工具 V9.5.2 (全新自定义+内置脚本)")
+        self.setWindowTitle("后处理工具 V9.6.0 (全新自定义+内置脚本)")
         # 获取主屏幕的可用几何尺寸（排除任务栏/Dock等）
         screen = QGuiApplication.primaryScreen()
         available_geometry = screen.availableGeometry()
@@ -135,10 +143,26 @@ class MainWindow(QMainWindow):
         canvas_area = QFrame()
         canvas_area.setFrameShape(QFrame.Shape.StyledPanel)
         canvas_layout = QVBoxLayout(canvas_area)
+        # self.canvas 必须保持这个名字: 全项目 20+ 处和 Useful_script/ 下十几个脚本硬引用它
         self.canvas = ImageCanvas(self.model, self.image_manager)
+        self.compare_canvas = ImageCanvas(self.model, self.image_manager, is_mirror=True)
+        self.compare_canvas.setVisible(False)
+        self.canvas.attach_mirror(self.compare_canvas)
+
+        self.canvas_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.canvas_splitter.addWidget(self.canvas)
+        self.canvas_splitter.addWidget(self.compare_canvas)
+        self.canvas_splitter.setChildrenCollapsible(False)
+        # QSplitter(Horizontal) 默认竖直 policy 只是 Preferred, 而它取代的 QGraphicsView 是
+        # Expanding。不补这一行, 多余高度会被 splitter 和下面的 ProgressSlider 平分, 页码标签
+        # 被撑成一大块空白。
+        self.canvas_splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
         self.progress_slider = ProgressSlider()
-        canvas_layout.addWidget(self.canvas)
-        canvas_layout.addWidget(self.progress_slider)
+        self.progress_slider.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        # 显式 stretch: 画布吃掉所有富余高度, 滑条+页码只占自己的 sizeHint
+        canvas_layout.addWidget(self.canvas_splitter, 1)
+        canvas_layout.addWidget(self.progress_slider, 0)
         
         self.right_splitter = QSplitter(Qt.Orientation.Vertical)
         self.preview_panel = PreviewPanel(self.model, self.image_manager, canvas_widget=self.canvas)
@@ -146,9 +170,15 @@ class MainWindow(QMainWindow):
         function_frame = QFrame()
         function_frame.setFrameShape(QFrame.Shape.StyledPanel)
         function_layout = QVBoxLayout(function_frame)
+        # 收一点默认边距/行距 (Qt 默认 9~11px)。窗口按默认尺寸 (屏幕 90%) 启动时,
+        # 整个面板就差这二三十像素放不下, 而收到 6px 肉眼看不出变挤。
+        function_layout.setContentsMargins(6, 6, 6, 6)
+        function_layout.setSpacing(6)
 
         display_group = QGroupBox("显示选项")
         display_layout = QVBoxLayout(display_group)
+        display_layout.setContentsMargins(8, 6, 8, 6)
+        display_layout.setSpacing(6)
         
         display_mode_layout = QHBoxLayout()
         self.hide_radio = QRadioButton("隐藏")
@@ -169,6 +199,7 @@ class MainWindow(QMainWindow):
         display_mode_layout.addWidget(self.ants_radio)
 
         general_options_layout = QHBoxLayout()
+        region_options_layout = QHBoxLayout()
         seed_options_layout = QHBoxLayout()
         self.mask_invert_checkbox = QCheckBox("反相显示")
         
@@ -190,16 +221,78 @@ class MainWindow(QMainWindow):
         self.preview_seed_badges_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.mask_source_label.setMinimumWidth(190)
         
+        self.compare_view_checkbox = QCheckBox("对比视图")
+        self.compare_view_checkbox.setToolTip(
+            "右侧开一个只读镜像视图，缩放/平移与左侧同步。\n"
+            "默认显示纯净图，用来对照蚂蚁线盖住的原始像素。"
+        )
+        self.compare_mode_combo = QComboBox()
+        self.compare_mode_combo.setToolTip("右侧视图的查看模式")
+        for label, key in (("纯净图", "hide"), ("面积", "area"), ("轮廓", "contour"), ("蚂蚁线", "ants")):
+            self.compare_mode_combo.addItem(label, key)
+        self.compare_mode_combo.setEnabled(False)
+        self.compare_mode_combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        self.region_mode_checkbox = QCheckBox("区域模式 (G)")
+        self.region_mode_checkbox.setToolTip(
+            "画「排除区域」——与 mask 完全独立的第二条通道（红/黄反向蚂蚁线）。\n"
+            "\n"
+            "· 自动保存**不需要关**：区域不走 mask 的写盘路径\n"
+            "· 蚂蚁线照常显示，当前查看模式不会被改掉\n"
+            "· 套索/多边形照用，Alt/Ctrl 减去，多笔自动累加\n"
+            "· 此模式下 Ctrl+Z 只撤区域，W 只清区域，都不碰 mask\n"
+            "\n"
+            "用途：给「按区域去掉连通分量」提供区域；后续镜像填充重推也用它。"
+        )
+        self.clear_region_button = QPushButton("清除区域")
+        self.clear_region_button.setToolTip("清空当前帧范围的排除区域")
+        self.clear_region_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        self.auto_save_checkbox = QCheckBox("自动保存 (X)")
+
+        # 行 1 (查看模式) 尾部收一个 stretch, 单选框不再被拉散; "来源" 靠右停在同一行,
+        # 省下原来 seed 行才有的那 30px。
+        display_mode_layout.addStretch()
+        display_mode_layout.addWidget(self.mask_source_label)
+
+        # 行 2: 视图开关。原来 6 个控件挤一行, 现在拆成两行, 每行都留得下空隙。
+        general_options_layout.setSpacing(12)
         general_options_layout.addWidget(self.lock_zoom_checkbox)
         general_options_layout.addWidget(self.mask_invert_checkbox)
+        general_options_layout.addWidget(self.compare_view_checkbox)
+        general_options_layout.addWidget(self.compare_mode_combo)
         general_options_layout.addStretch()
 
-        seed_options_layout.setSpacing(10)
-        seed_options_layout.addWidget(self.seed_visual_mode_button)
-        seed_options_layout.addWidget(self.preview_seed_badges_checkbox)
-        seed_options_layout.addStretch()
-        seed_options_layout.addWidget(self.seed_status_label)
-        seed_options_layout.addWidget(self.mask_source_label)
+        # "图像效果调整" 原来独占一个 "效果设置" QGroupBox: 一个按钮花掉 70px 竖直空间,
+        # 是面板放不下的主因之一。它本来就是显示类操作, 并进本行右端。
+        self.effects_button = QPushButton("图像效果调整 (C)") # 使用 QPushButton 更符合语义
+
+        # 行 3: 区域模式 + 自动保存 (自动保存原来自己独占一行) + 效果按钮
+        region_options_layout.setSpacing(12)
+        region_options_layout.addWidget(self.region_mode_checkbox)
+        region_options_layout.addWidget(self.clear_region_button)
+        region_options_layout.addSpacing(16)
+        region_options_layout.addWidget(self.auto_save_checkbox)
+        region_options_layout.addStretch()
+        region_options_layout.addWidget(self.effects_button)
+
+        if SHOW_SEED_CONTROLS:
+            seed_options_layout.setSpacing(10)
+            seed_options_layout.addWidget(self.seed_visual_mode_button)
+            seed_options_layout.addWidget(self.preview_seed_badges_checkbox)
+            seed_options_layout.addStretch()
+            seed_options_layout.addWidget(self.seed_status_label)
+        else:
+            # 不进任何 layout, 但要给个父窗口: 无父且未 show 的 QWidget 一旦被别处
+            # show() 就会变成顶层窗口。对象全部留着, 外部脚本 (seed_manager 等) 仍能
+            # setText / 读状态, 不会 AttributeError。
+            for _seed_widget in (
+                self.seed_visual_mode_button,
+                self.preview_seed_badges_checkbox,
+                self.seed_status_label,
+            ):
+                _seed_widget.setParent(display_group)
+                _seed_widget.setVisible(False)
 
         self.filename_display_layout = QHBoxLayout()
         self.filename_label_title = QLabel("当前文件:")
@@ -214,24 +307,17 @@ class MainWindow(QMainWindow):
         self.filename_display_layout.addWidget(self.filename_label_title)
         self.filename_display_layout.addWidget(self.filename_label_value)
 
-        auto_save_layout = QHBoxLayout()
-        self.auto_save_checkbox = QCheckBox("自动保存 (X)")
-        auto_save_layout.addWidget(self.auto_save_checkbox)
-
         display_layout.addLayout(display_mode_layout)
         display_layout.addLayout(general_options_layout)
-        display_layout.addLayout(seed_options_layout)
+        display_layout.addLayout(region_options_layout)
+        if SHOW_SEED_CONTROLS:
+            display_layout.addLayout(seed_options_layout)
         display_layout.addLayout(self.filename_display_layout)
-        display_layout.addLayout(auto_save_layout)
-
-        effects_group = QGroupBox("效果设置")
-        effects_layout = QHBoxLayout(effects_group)
-        self.effects_button = QPushButton("图像效果调整 (C)") # 使用 QPushButton 更符合语义
-        effects_layout.addWidget(self.effects_button)
-        effects_layout.addStretch()
 
         tools_group = QGroupBox("编辑工具")
         tools_layout = QVBoxLayout(tools_group)
+        tools_layout.setContentsMargins(8, 6, 8, 6)
+        tools_layout.setSpacing(6)
         tool_buttons_layout = QHBoxLayout()
         self.lasso_button = QPushButton("套索 (+/Q)")
         self.lasso_subtract_button = QPushButton("套索 (-)")
@@ -276,17 +362,28 @@ class MainWindow(QMainWindow):
         tool_options_layout.addWidget(self.selection_add_mode_checkbox)
 
         
-        action_buttons_layout = QVBoxLayout()
-        
+        # 4 个动作按钮改成 2x2: 竖排要 4 行 (~145px), 这是右侧面板高度的大头。
+        action_buttons_layout = QGridLayout()
+        action_buttons_layout.setHorizontalSpacing(8)
+        action_buttons_layout.setVerticalSpacing(6)
+
         self.toggle_mask_source_button = QPushButton("切换Mask来源 (T)")
         self.clear_button = QPushButton("清除Mask (W)")
         self.save_button = QPushButton("保存 (Ctrl+S)")
         self.save_and_next_button = QPushButton("保存并下一张 (S or 双击)")
-        
-        action_buttons_layout.addWidget(self.toggle_mask_source_button)
-        action_buttons_layout.addWidget(self.clear_button)
-        action_buttons_layout.addWidget(self.save_button)
-        action_buttons_layout.addWidget(self.save_and_next_button)
+
+        for _action_button in (
+            self.toggle_mask_source_button,
+            self.clear_button,
+            self.save_button,
+            self.save_and_next_button,
+        ):
+            _action_button.setMinimumHeight(32)
+
+        action_buttons_layout.addWidget(self.toggle_mask_source_button, 0, 0)
+        action_buttons_layout.addWidget(self.clear_button, 0, 1)
+        action_buttons_layout.addWidget(self.save_button, 1, 0)
+        action_buttons_layout.addWidget(self.save_and_next_button, 1, 1)
         tools_layout.addLayout(tool_buttons_layout)
         tools_layout.addLayout(tool_options_layout) # 将滑块工具添加到工具布局中
         tools_layout.addLayout(action_buttons_layout)
@@ -298,19 +395,91 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self.next_button)
 
         function_layout.addWidget(display_group)
-        function_layout.addWidget(effects_group)
         function_layout.addWidget(tools_group)
         function_layout.addStretch()
         function_layout.addLayout(nav_layout)
         function_frame.setLayout(function_layout)
+
+        # 右侧控制面板套一层 QScrollArea。路径面板展开会吃掉 200+ px 竖直空间, 直接挂在
+        # splitter 上时 QVBoxLayout 只能把按钮压到互相重叠 (截图时尤其难看)。有滚动条兜底
+        # 后, 空间不够最多是出现滚动条, 不会再挤压任何控件。
+        self.function_frame = function_frame
+        self.function_scroll = QScrollArea()
+        self.function_scroll.setWidgetResizable(True)
+        self.function_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.function_scroll.setWidget(function_frame)
+        self.function_scroll.setMinimumHeight(200)
+
         self.right_splitter.addWidget(self.preview_panel)
-        self.right_splitter.addWidget(function_frame)
-        self.right_splitter.setSizes([600, 200])
+        self.right_splitter.addWidget(self.function_scroll)
+        # 富余高度全给预览图, 控制面板保持自然高度 (真正的初值在 showEvent 里按
+        # sizeHint 现算, 见 _apply_default_right_split)
+        self.right_splitter.setStretchFactor(0, 1)
+        self.right_splitter.setStretchFactor(1, 0)
+        self.right_splitter.setSizes([420, 470])
         self.main_splitter.addWidget(canvas_area)
         self.main_splitter.addWidget(self.right_splitter)
         self.main_splitter.setSizes([1200, 600])
         main_layout.addWidget(self.main_splitter)
     
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_right_split_applied", False):
+            self._right_split_applied = True
+            # 延后到本轮布局结束: showEvent 里 splitter 还可能是旧几何
+            QTimer.singleShot(0, self._apply_default_right_split)
+
+    def _apply_default_right_split(self):
+        """控制面板拿它自然需要的高度, 剩下的全给预览图。
+
+        QSplitter.setSizes 是按比例缩放的, 写死 [600, 200] 等于把控制面板永久钉在
+        25% —— 路径面板一展开就不够放, 按钮被压成一团。这里直接量"内容还差多少",
+        从预览图那边匀过来 (匀到预览图的下限为止), 多了再还回去; 手柄宽度、边框这些
+        都不用自己算。
+        """
+        if self.right_splitter.height() <= 0:
+            return
+
+        # 横向: 面板窄于内容最小宽度就会冒出横向滚动条 (5 个工具按钮那一行最宽), 横条
+        # 还要再吃掉一截高度。给右侧留个下限让画布去让宽度 —— 直接量"还差多少", 免得
+        # 自己算滚动条/边框/splitter 那几层 chrome。上限是窗口一半, 防止画布被吃光。
+        for _ in range(3):
+            deficit = (self.function_frame.minimumSizeHint().width()
+                       - self.function_scroll.viewport().width())
+            if deficit <= 0:
+                break
+            new_min = min(self.right_splitter.width() + deficit, max(320, self.width() // 2))
+            if new_min <= self.right_splitter.minimumWidth():
+                break
+            self.right_splitter.setMinimumWidth(new_min)
+            main_sizes = self.main_splitter.sizes()
+            if len(main_sizes) >= 2:
+                # 手动推一把, 否则这一轮量到的还是旧宽度
+                self.main_splitter.setSizes(
+                    [max(0, main_sizes[0] - deficit), main_sizes[1] + deficit])
+
+        # 预览面板自己的最小高度 (标题条 + 3 行缩略图) 才是真下限, 写个更小的常数
+        # 只会让下面的循环空转 4 圈。
+        preview_min = max(120, self.preview_panel.minimumSizeHint().height())
+        scroll_min = self.function_scroll.minimumHeight()
+        for _ in range(4):
+            delta = (self.function_frame.sizeHint().height()
+                     - self.function_scroll.viewport().height())
+            if abs(delta) <= 2:
+                break
+            sizes = self.right_splitter.sizes()
+            if len(sizes) < 2:
+                return
+            if delta > 0:
+                shift = min(delta, max(0, sizes[0] - preview_min))
+            else:
+                shift = -min(-delta, max(0, sizes[1] - scroll_min))
+            if shift == 0:
+                break
+            self.right_splitter.setSizes([sizes[0] - shift, sizes[1] + shift])
+        if hasattr(self, "initial_layout_states"):
+            self.initial_layout_states['right_splitter'] = self.right_splitter.saveState()
+
     def _create_menu(self):
         self.menu_bar = self.menuBar()
         file_menu = self.menu_bar.addMenu("文件(&F)")
@@ -440,6 +609,8 @@ class MainWindow(QMainWindow):
             'toggle_path_panel':self.toggle_path_dock_action.trigger,
             'toggle_mask_source':self.model.toggle_mask_source,
             'cycle_seed_visual_mode': self.cycle_seed_visual_mode,
+            'toggle_compare_view': lambda: self.compare_view_checkbox.toggle(),
+            'toggle_region_mode': lambda: self.region_mode_checkbox.toggle(),
         }
         
         for key, func in key_map.items():
@@ -519,6 +690,13 @@ class MainWindow(QMainWindow):
         valid_modes = {"fast", "balanced", "info"}
         if mode not in valid_modes:
             mode = "balanced"
+        if not SHOW_SEED_CONTROLS:
+            # 控件下线时钉死在 fast: 只留内部状态, 不画滑条彩线/预览角标 ——
+            # 否则用户看得见 seed 视觉却没有任何开关能关掉它。
+            # persist 一并关掉: 别把这个临时值写进配置, 否则将来把控件放回来时
+            # 用户原本的 balanced/info 已经被覆盖成 fast 了。
+            mode = "fast"
+            persist = False
 
         show_slider_markers = mode in {"balanced", "info"}
         show_preview_badges = mode == "info"
@@ -532,7 +710,7 @@ class MainWindow(QMainWindow):
         self.preview_seed_badges_checkbox.blockSignals(False)
         self.preview_seed_badges_checkbox.setEnabled(mode == "info")
 
-        if self.model.config.has_section("Preview"):
+        if SHOW_SEED_CONTROLS and self.model.config.has_section("Preview"):
             self.model.config.set("Preview", "seed_visual_mode", mode)
 
         self._update_seed_visual_mode_button_text(
@@ -597,6 +775,10 @@ class MainWindow(QMainWindow):
         self.effects_button.clicked.connect(self.open_effects_chooser)
         self.mask_invert_checkbox.toggled.connect(self.model.set_mask_invert)
         self.lock_zoom_checkbox.toggled.connect(self.model.set_zoom_locked)
+        self.compare_view_checkbox.toggled.connect(self.on_compare_view_toggled)
+        self.compare_mode_combo.currentIndexChanged.connect(self.on_compare_mode_changed)
+        self.region_mode_checkbox.toggled.connect(self.on_region_mode_toggled)
+        self.clear_region_button.clicked.connect(self.on_clear_region)
         self.seed_visual_mode_button.clicked.connect(self.cycle_seed_visual_mode)
         self.preview_seed_badges_checkbox.toggled.connect(lambda checked: setattr(self.model, "show_preview_seed_badges", checked))
         self.preview_seed_badges_checkbox.toggled.connect(self._on_preview_seed_badges_toggled)
@@ -648,6 +830,36 @@ class MainWindow(QMainWindow):
 
     def toggle_mask_visibility(self):
         self.model.toggle_mask_visibility()
+
+    @pyqtSlot(bool)
+    def on_region_mode_toggled(self, enabled):
+        """开/关排除区域绘制模式。
+
+        刻意什么状态都不改 —— 不碰 auto_save, 不碰 display_mode, 不碰 selection_tool。
+        老脚本正是因为强改这些又不还原, 才留下一串副作用。
+        """
+        self.model.set_region_mode(enabled)
+        self.canvas.setFocus()
+
+    def on_clear_region(self):
+        self.canvas.clear_region()
+        self.canvas.setFocus()
+
+    def on_compare_view_toggled(self, enabled):
+        """开/关右侧只读对比视图。"""
+        self.compare_canvas.setVisible(enabled)
+        self.compare_mode_combo.setEnabled(enabled)
+        if not enabled:
+            return
+        # 五五开; 用户之后拖 splitter 的比例本轮会保留
+        width = max(self.canvas_splitter.width(), 2)
+        self.canvas_splitter.setSizes([width // 2, width // 2])
+        # 刚变可见, 主视图还没有任何事件会触发推送, 这里显式同步一次内容+视角
+        self.canvas.sync_mirror_now()
+
+    @pyqtSlot()
+    def on_compare_mode_changed(self):
+        self.compare_canvas.set_display_mode_override(self.compare_mode_combo.currentData())
 
     def _on_preview_seed_badges_toggled(self, checked):
         current_mode = getattr(self.model, "seed_visual_mode", "balanced")

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -24,6 +25,26 @@ from utils.path_utils import filesystem_path
 
 JOINABLE_ROLE = Qt.ItemDataRole.UserRole.value + 1
 SELECTED_ROLE = Qt.ItemDataRole.UserRole.value + 2
+
+
+def folder_display_path(exports_dir: str, full_path: str) -> str:
+    """Render ``full_path`` relative to ``exports_dir`` so a _masks\\ parent shows inline.
+
+    Origin folders are direct children of Exports and render as their bare name;
+    mask/save folders resolved into the _masks/ subfolder render as
+    ``_masks\\<name>`` — making the nesting obvious instead of looking like a
+    _contrasted-level sibling. Anything outside the Exports dir (different drive,
+    parent traversal) falls back to the bare folder name.
+    """
+    if not full_path:
+        return ""
+    try:
+        rel = os.path.relpath(full_path, exports_dir)
+    except ValueError:
+        return Path(full_path).name
+    if rel == os.curdir or rel.startswith(os.pardir):
+        return Path(full_path).name
+    return rel
 
 
 class BinaryExportsSessionDialog(QDialog):
@@ -75,7 +96,9 @@ class BinaryExportsSessionDialog(QDialog):
         config_layout.addLayout(suffix_row)
 
         note = QLabel(
-            "默认会勾选所有 contrasted 文件夹；初始 Mask 和保存后缀对应的文件夹不存在时，会在创建会话时自动建立为空文件夹。"
+            "默认勾选所有 *_contrasted 原图文件夹。Mask 与精修结果统一读写于 <Exports>\\_masks\\ 子文件夹"
+            "——见下方「Mask文件夹 / 保存文件夹」列的 _masks\\ 前缀，不会在 contrasted 同级新建文件夹"
+            "（若无 _masks\\ 则回退到平铺同级）。精修默认写入 *_mask_refined，与流程标准一致；缺失的文件夹会在创建会话时自动建立。"
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray;")
@@ -105,6 +128,9 @@ class BinaryExportsSessionDialog(QDialog):
         header_view.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         header_view.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setDefaultSectionSize(44)
+        # The row-number gutter renders too narrow and clips the digits; it adds
+        # no information here (the 数据集 column already identifies each row).
+        self.table.verticalHeader().setVisible(False)
         self.table.setColumnWidth(0, 120)
         self.table.setColumnWidth(1, 250)
         self.table.setColumnWidth(2, 95)
@@ -134,9 +160,12 @@ class BinaryExportsSessionDialog(QDialog):
     def current_suffixes(self) -> Tuple[str, str, str]:
         return (
             self.origin_suffix_input.text().strip() or "_contrasted",
-            self.mask_suffix_input.text().strip() or "_origin_mask_new",
-            self.save_suffix_input.text().strip() or "_origin_mask_refined",
+            self.mask_suffix_input.text().strip() or "_mask",
+            self.save_suffix_input.text().strip() or "_mask_refined",
         )
+
+    def _display_folder(self, full_path: str) -> str:
+        return folder_display_path(self.exports_dir, full_path)
 
     def refresh_candidates(self):
         from core.binary_queue_core import BinaryQueueCore
@@ -190,7 +219,10 @@ class BinaryExportsSessionDialog(QDialog):
             checkbox.toggled.connect(lambda checked, r=row: self.on_join_toggled(r, checked))
             self.table.setCellWidget(row, 0, checkbox)
 
-            mask_folder_text = dataset.get("mask_folder", Path(dataset.get("mask_dir", "")).name)
+            # Show each folder as a path relative to the Exports root so the
+            # _masks\ parent is visible inline: mask/save folders live INSIDE
+            # <Exports>\_masks\, not as siblings of the _contrasted origin folder.
+            mask_folder_text = self._display_folder(dataset.get("mask_dir", ""))
             if joinable and not mask_dir_exists:
                 mask_folder_text += "（将创建）"
             values = [
@@ -198,20 +230,32 @@ class BinaryExportsSessionDialog(QDialog):
                 str(origin_count),
                 str(mask_count),
                 str(save_count),
-                dataset.get("source_folder", Path(dataset.get("origin_dir", "")).name),
+                self._display_folder(dataset.get("origin_dir", "")),
                 mask_folder_text,
-                dataset.get("save_folder", Path(dataset.get("save_dir", "")).name),
+                self._display_folder(dataset.get("save_dir", "")),
             ]
+            # Cols 5/6/7 show only the (truncated) folder name; expose the full
+            # resolved path — including the _masks/ subfolder — as a tooltip.
+            path_by_col = {
+                5: str(dataset.get("origin_dir", "")),
+                6: str(dataset.get("mask_dir", "")),
+                7: str(dataset.get("save_dir", "")),
+            }
             for col, value in enumerate(values, start=1):
                 item = QTableWidgetItem(value)
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 if col in (2, 3, 4):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                tooltip_parts = []
+                if path_by_col.get(col):
+                    tooltip_parts.append(path_by_col[col])
                 if joinable and not mask_dir_exists:
-                    item.setToolTip("初始 Mask 文件夹不存在，创建会话时会自动创建空文件夹。")
+                    tooltip_parts.append("初始 Mask 文件夹不存在，创建会话时会自动创建空文件夹。")
                 if not joinable:
-                    item.setToolTip("该文件夹没有可加载的原图帧，不能加入会话。")
+                    tooltip_parts.append("该文件夹没有可加载的原图帧，不能加入会话。")
                     item.setForeground(Qt.GlobalColor.gray)
+                if tooltip_parts:
+                    item.setToolTip("\n".join(tooltip_parts))
                 self.table.setItem(row, col, item)
 
         self.summary_label.setText(

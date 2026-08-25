@@ -26,6 +26,7 @@ class SettingsDialog(QDialog):
         'erase_mode': "\u6a61\u76ae\u64e6 (Eraser)",
         'clear_mask': "\u6e05\u9664\u8499\u7248 (Clear Mask)",
         'toggle_mask': "蚂蚁线 / 隐藏快速切换 (Toggle Ants / Hide)",
+        'toggle_region_mode': "排除区域绘制模式 (Toggle Region Mode)",
         'auto_save': "\u81ea\u52a8\u4fdd\u5b58 (Auto Save)",
         'high_contrast': "\u5feb\u901f\u5bf9\u6bd4\u5ea6 (Quick Contrast)",
         'open_effects_panel': "\u6253\u5f00\u6548\u679c\u9762\u677f (Open Effects Panel)",
@@ -230,10 +231,10 @@ class SettingsDialog(QDialog):
         batch_layout.addRow(QLabel("默认导入源后缀 (Origin):"), self.origin_suffix_input)
         
         self.mask_suffix_input = QLineEdit()
-        self.mask_suffix_input.setPlaceholderText("例如: _mask_new")
+        self.mask_suffix_input.setPlaceholderText("例如: _mask_refined")
         self.mask_suffix_input.setToolTip(
             "指定批量导入、回写和 Rg 计算中，处理完成的 Mask 默认存放文件夹后缀。\n"
-            "默认为 _mask_new"
+            "默认为 _mask_refined（与流程标准一致；旧数据若用 _mask_new 可在此改回）"
         )
         batch_layout.addRow(QLabel("默认 Mask 后缀:"), self.mask_suffix_input)
         
@@ -425,7 +426,7 @@ class SettingsDialog(QDialog):
         origin_suffix = self.config.get('Scripts', 'default_origin_suffix', fallback='_origin')
         self.origin_suffix_input.setText(origin_suffix)
         
-        mask_suffix = self.config.get('Scripts', 'default_mask_suffix', fallback='_mask_new')
+        mask_suffix = self.config.get('Scripts', 'default_mask_suffix', fallback='_mask_refined')
         self.mask_suffix_input.setText(mask_suffix)
         
         # 显示对话框
@@ -499,17 +500,13 @@ class SettingsDialog(QDialog):
         if self.config.has_section('Theme_Dark'):
              self._on_theme_selected('Dark')
 
-        # 恢复默认快捷键
-        defaults_keys = {
-            'next_image': "D; Right", 'prev_image': "A; Left", 'save': "Ctrl+S",
-            'save_and_next': "S", 'next_binary_dataset': "N",
-            'previous_binary_dataset': "B",
-            'skip_current_binary_dataset': "Ctrl+Shift+K",
-            'draw_mode': "Q", 'erase_mode': "E", 'polygon_mode': "P",
-            'clear_mask': "W", 'toggle_mask': "H", 'auto_save': "X",
-            'high_contrast': "C", 'open_effects_panel': "Shift+C", 'import_files': "I",
-            'toggle_image_source': "Space", 'toggle_path_panel':"J", 'toggle_mask_source': "T"
-        }
+        # 恢复默认快捷键。
+        # 直接读 AppModel.DEFAULT_KEYBINDINGS —— 这里原本是一份手抄副本, 已经漂移
+        # (漏了 cycle_seed_visual_mode / toggle_compare_view, 点"恢复默认"时它们
+        # 不会被重置)。新增快捷键只该改 AppModel 一处。
+        from core.app_model import AppModel
+
+        defaults_keys = AppModel.DEFAULT_KEYBINDINGS
         for key, value in defaults_keys.items():
              if key in self.key_editors:
                  self.key_editors[key].setText(value)

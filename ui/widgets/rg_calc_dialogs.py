@@ -17,10 +17,11 @@ class RgCalculationDialog(QDialog):
         self.rois = rois
         self.main_window = main_window
         
-        # Read from config if available
-        self.default_suffix = '_mask_new'
+        # Read from config if available. Default aligns with the pipeline standard
+        # refined-mask suffix (_mask_refined); the writeback step produces that name.
+        self.default_suffix = '_mask_refined'
         if self.main_window and hasattr(self.main_window, 'model'):
-            self.default_suffix = self.main_window.model.config.get('Scripts', 'default_mask_suffix', fallback='_mask_new')
+            self.default_suffix = self.main_window.model.config.get('Scripts', 'default_mask_suffix', fallback='_mask_refined')
         
         self.init_ui()
         self.populate_table()

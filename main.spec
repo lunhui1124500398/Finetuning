@@ -23,7 +23,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # 项目代码从未 import torch; 它是被 scipy._lib.array_api_compat 的条件导入
+    # 牵连进来的, 会让 dist 从 ~400MB 膨胀到 4GB。显式排除。
+    excludes=['torch', 'torchgen'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -37,7 +39,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='FinetuningV9.5.2',
+    name='FinetuningV9.6.0',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -57,5 +59,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='FinetuningV9.5.2',
+    name='FinetuningV9.6.0',
 )

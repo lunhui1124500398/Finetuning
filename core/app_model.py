@@ -28,6 +28,8 @@ class AppModel(QObject):
     effects_changed = pyqtSignal()
     preview_effects_changed = pyqtSignal()
     seed_visual_mode_changed = pyqtSignal(str)
+    region_mode_changed = pyqtSignal(bool)
+    region_updated = pyqtSignal()
 
     DEFAULT_KEYBINDINGS = {
         "next_image": "D; Right",
@@ -50,6 +52,9 @@ class AppModel(QObject):
         "toggle_path_panel": "J",
         "toggle_mask_source": "T",
         "cycle_seed_visual_mode": "F6",
+        "toggle_compare_view": "V",
+        # G 而非 B: B 已经是 previous_binary_dataset。V/C/X/T/Z 亦已占用。
+        "toggle_region_mode": "G",
     }
 
     def __init__(self, config_path=None):
@@ -93,6 +98,7 @@ class AppModel(QObject):
         self._last_h_scroll = 0
         self._last_v_scroll = 0
         self._display_mode = "ants"
+        self._region_mode = False
         self._show_denoised = False
         self._effects_bypassed = False
         self._load_from_save_path = True
@@ -218,6 +224,24 @@ class AppModel(QObject):
     def toggle_mask_visibility(self):
         """Quick-toggle between marching ants and hidden mask."""
         self.set_display_mode("hide" if self._display_mode == "ants" else "ants")
+
+    @property
+    def region_mode(self):
+        """区域绘制模式: 笔画提交到 _region_path 而不是 mask。
+
+        注意这**不影响自动保存** —— 区域和 mask 是两条独立通道, save_mask_for_index
+        只序列化 _selection_path。这正是这套机制存在的理由, 见 core/exclusion_region.py。
+        """
+        return self._region_mode
+
+    def set_region_mode(self, enabled: bool):
+        enabled = bool(enabled)
+        if self._region_mode != enabled:
+            self._region_mode = enabled
+            self.region_mode_changed.emit(enabled)
+
+    def toggle_region_mode(self):
+        self.set_region_mode(not self._region_mode)
 
     @property
     def auto_save(self):

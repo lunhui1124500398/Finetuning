@@ -9,7 +9,7 @@ components inside or outside that region over a frame range.
 
 import numpy as np
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPainterPath
+from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -123,6 +123,12 @@ class RegionCaptureDialog(QDialog):
         self.region_mask_getter = region_mask_getter
         self._original_window_title = main_window.windowTitle()
         self._view_restored = False
+        # 进入前的状态快照。老版本只快照了标题, 却去改 display_mode/selection_tool
+        # 而不还原 —— 用户从 contour+polygon 进来, 出去变成 ants+lasso。
+        # 现在这个脚本本身已经不改那两项了, 快照留着是为了万一别处改动也能兜住。
+        self._prev_region_mode = bool(main_window.model.region_mode)
+        self._prev_display_mode = main_window.model.display_mode
+        self._prev_selection_tool = main_window.model.selection_tool
 
         self.setWindowTitle("区域绘制模式：画好区域后继续处理")
         self.setMinimumWidth(640)
@@ -169,7 +175,7 @@ class RegionCaptureDialog(QDialog):
         if values["component_mode"] == "whole_component":
             matching_line = f"，判定方式：{match_text}"
         summary = QLabel(
-            "步骤 1：回到主画布，在空白区域层上画出处理区域。\n"
+            "步骤 1：回到主画布，画出处理区域（红/黄反向蚂蚁线即区域）。\n"
             "步骤 2：画好后回到这里，点击“我已画好区域，开始处理”。\n"
             f"当前设置：{mode_text}，处理方式：{component_text}{matching_line}，帧范围 {values['start_index'] + 1}-{values['end_index'] + 1}"
         )
@@ -177,9 +183,15 @@ class RegionCaptureDialog(QDialog):
         summary.setObjectName("ModeNote")
 
         note = QLabel(
-            "当前已自动切换到：蚂蚁线显示 + 套索工具。\n"
-            "这里画的是临时区域，不会直接写回当前 mask。\n"
-            "处理结束或取消后，当前帧会自动恢复正常显示。"
+            "已开启「区域模式」，区域是与 mask 完全独立的一条通道：\n"
+            "· 自动保存**不需要关**，区域不会被当成 mask 写盘\n"
+            "· mask 蚂蚁线照常显示，你当前的查看模式和工具都没有被改动\n"
+            "· 套索/多边形照用，Alt/Ctrl 减去，多笔自动累加\n"
+            "· 此模式下 Ctrl+Z 只撤区域，W 只清区域\n"
+            "\n"
+            "本脚本只使用手动画的区域；自动黑边检测是逐帧变化的，"
+            "跨帧取并集会把粒子一起吞掉，故不在此处参与。\n"
+            "处理结束或取消后，区域会保留（已存入 _exclusion_region.json）。"
         )
         note.setWordWrap(True)
         note.setObjectName("ModeNote")
@@ -207,6 +219,18 @@ class RegionCaptureDialog(QDialog):
         self._view_restored = True
         model = self.main_window.model
         self.main_window.setWindowTitle(self._original_window_title)
+
+        # 逐项还原快照。区域本身**不清除** —— 它已经落盘进 _exclusion_region.json,
+        # 用户很可能还要拿它做镜像填充重推, 或者微调后再跑一次。
+        model.set_region_mode(self._prev_region_mode)
+        if hasattr(self.main_window, "region_mode_checkbox"):
+            self.main_window.region_mode_checkbox.blockSignals(True)
+            self.main_window.region_mode_checkbox.setChecked(self._prev_region_mode)
+            self.main_window.region_mode_checkbox.blockSignals(False)
+        model.set_display_mode(self._prev_display_mode)
+        model.set_selection_tool(self._prev_selection_tool)
+        self.main_window.canvas.set_region_range(None, None)
+
         if model.current_index >= 0:
             self.main_window.canvas.load_image(model.current_index)
             self.main_window.preview_panel.update_previews(model.current_index)
@@ -250,17 +274,27 @@ class RegionCaptureDialog(QDialog):
             QApplication.processEvents()
             return True
 
-        result = apply_region_component_filter(
-            frames=self.frames,
-            region_mask=region_mask,
-            start_index=self.values["start_index"],
-            end_index=self.values["end_index"],
-            remove_mode=self.values["remove_mode"],
-            component_mode=self.values["component_mode"],
-            region_match_mode=self.values["region_match_mode"],
-            progress_callback=progress_cb,
-        )
-        progress.close()
+        # try/finally: 老版本一旦 apply_region_component_filter 抛异常, 整个还原
+        # 被跳过, 窗口标题卡在 [区域绘制模式进行中], 区域模式也退不出来。
+        try:
+            result = apply_region_component_filter(
+                frames=self.frames,
+                region_mask=region_mask,
+                start_index=self.values["start_index"],
+                end_index=self.values["end_index"],
+                remove_mode=self.values["remove_mode"],
+                component_mode=self.values["component_mode"],
+                region_match_mode=self.values["region_match_mode"],
+                progress_callback=progress_cb,
+            )
+        except Exception as exc:
+            progress.close()
+            self._restore_main_view()
+            QMessageBox.critical(self.main_window, "处理失败", f"按区域去掉连通分量时出错：\n{exc}")
+            self.reject()
+            return
+        finally:
+            progress.close()
 
         self._restore_main_view()
         if hasattr(self.main_window, "refresh_seed_cache"):
@@ -308,14 +342,11 @@ def run(main_window):
         QMessageBox.warning(main_window, "缺少保存路径", "请先加载当前数据集，并确保 save_path 指向 mask_new。")
         return
 
-    if model.auto_save:
-        QMessageBox.warning(
-            main_window,
-            "请先关闭自动保存",
-            "这个脚本会把当前画布上的临时选区当作区域参考。\n"
-            "为避免临时区域被自动写回，请先关闭自动保存（X）后再运行。",
-        )
-        return
+    # 注意: 这里**刻意不再检查 auto_save**。
+    # 区域现在画在 canvas._region_path 上, 与 mask 是两条独立通道, 而
+    # save_mask_for_index / get_pixmap_from_path 只序列化 _selection_path ——
+    # 区域根本不在写盘路径上, 因此自动保存开着也不会把它当 mask 存进去。
+    # 见 core/exclusion_region.py 的模块注释。
 
     if model.current_index < 0:
         QMessageBox.warning(main_window, "没有当前帧", "请先加载当前数据集。")
@@ -339,17 +370,18 @@ def run(main_window):
         QMessageBox.warning(main_window, "范围错误", "起始帧不能大于结束帧。")
         return
 
-    if model.current_index >= 0:
-        main_window.canvas.save_current_mask()
-
-    main_window.canvas._selection_path = QPainterPath()
-    main_window.canvas.update_selection_display()
-    model.set_display_mode("ants")
-    model.set_selection_tool("lasso")
+    # 只开区域模式。**不清 _selection_path**(蚂蚁线保持可见)、**不改 display_mode**、
+    # **不改 selection_tool** —— 用户当前的显示方式和顺手的工具原样留着。
+    model.set_region_mode(True)
+    if hasattr(main_window, "region_mode_checkbox"):
+        main_window.region_mode_checkbox.blockSignals(True)
+        main_window.region_mode_checkbox.setChecked(True)
+        main_window.region_mode_checkbox.blockSignals(False)
+    main_window.canvas.set_region_range(values["start_index"], values["end_index"])
     main_window.canvas.setFocus()
 
     def region_mask_getter():
-        region_pixmap = main_window.canvas.get_pixmap_from_path()
+        region_pixmap = main_window.canvas.get_region_mask_pixmap()
         if region_pixmap.isNull():
             return None
         return _pixmap_to_binary_array(region_pixmap)

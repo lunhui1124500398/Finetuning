@@ -58,7 +58,7 @@ def run(main_window):
         return
         
     rois_count = len(manifest.get('rois', []))
-    config_suffix = model.config.get('Scripts', 'default_mask_suffix', fallback='_mask_new')
+    config_suffix = model.config.get('Scripts', 'default_mask_suffix', fallback='_mask_refined')
     default_suffix = manifest.get('mask_target_suffix', config_suffix)
     
     # Let user confirm or change the target suffix

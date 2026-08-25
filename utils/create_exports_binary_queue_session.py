@@ -13,8 +13,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--exports-dir", required=True, help="Exports directory containing *_contrasted ROI folders.")
     parser.add_argument("--origin-suffix", default="_contrasted", help="Origin folder suffix. Default: _contrasted")
-    parser.add_argument("--mask-suffix", default="_origin_mask_new", help="Initial mask folder suffix.")
-    parser.add_argument("--save-suffix", default="_origin_mask_refined", help="Editable save folder suffix.")
+    parser.add_argument("--mask-suffix", default="_mask", help="Initial mask folder suffix.")
+    parser.add_argument("--save-suffix", default="_mask_refined", help="Editable save folder suffix.")
     parser.add_argument(
         "--session-dir",
         default="",
